@@ -66,7 +66,7 @@ python scripts/train.py --config configs/train.yaml   # Phase B/C (đang skeleto
 python scripts/eval.py --config configs/train.yaml
 ```
 
-## Phân công gợi ý (nhóm 2)
+## Phân công (nhóm 2)
 
 | Vai trò | Module |
 |---------|--------|
