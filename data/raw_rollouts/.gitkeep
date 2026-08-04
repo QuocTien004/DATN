@@ -1,0 +1,1 @@
+# Keep storage dirs tracked as empty placeholders (data/ itself is gitignored).

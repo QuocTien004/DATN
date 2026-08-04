@@ -1,0 +1,43 @@
+# MetaDrive environment config
+# Observation: RGB camera + vector state (Encoder = CNN + MLP)
+
+seed: 0
+num_scenarios: 100
+start_seed: 0
+
+# Rendering: keep False while training (no 3D window)
+use_render: false
+
+# Image observation — CHỈ 1 camera TRƯỚC (rgb_camera).
+# Không dùng multi-view trái/phải/sau: tập trung chất lượng model trên 1650.
+image_observation: true
+image_source: rgb_camera
+image_height: 256
+image_width: 256
+stack_size: 1
+
+# Chất lượng asset (ít nén model hơn)
+disable_model_compression: true
+show_skybox: true
+show_terrain: true
+
+# Episode / traffic
+horizon: 1000
+traffic_density: 0.1
+accident_prob: 0.0
+
+# Vehicle / action
+# MetaDrive default continuous action: [steering, throttle_brake] in [-1, 1]
+manual_control: false
+controller: default
+decision_repeat: 5
+
+# Optional reward overrides (applied in envs/reward.py if enabled)
+use_custom_reward: false
+reward:
+  success: 10.0
+  out_of_road: -5.0
+  crash_vehicle: -5.0
+  crash_object: -5.0
+  speed_reward: 0.1
+  driving_reward: 1.0

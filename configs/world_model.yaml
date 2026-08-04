@@ -1,0 +1,26 @@
+# World Model (RSSM / DreamerV3-style) hyperparameters
+
+encoder:
+  cnn_channels: [32, 64, 128, 256]
+  mlp_hidden: [256, 256]
+  embed_dim: 512
+
+rssm:
+  deter_dim: 512          # h_t (GRU hidden)
+  stoch_dim: 32           # number of categorical groups
+  stoch_classes: 32       # classes per group (32x32 like DreamerV3)
+  hidden_dim: 512
+
+decoder:
+  cnn_channels: [256, 128, 64, 32]
+
+predictors:
+  reward_hidden: [256, 256]
+  continue_hidden: [256, 256]
+
+training:
+  lr: 1.0e-4
+  grad_clip: 1000.0
+  free_nats: 1.0          # free bits / KL free nats
+  kl_balance: 0.8
+  imagination_horizon: 15

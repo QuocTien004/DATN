@@ -1,0 +1,23 @@
+﻿checkpoints/
+logs/
+data/**
+!data/**/
+!data/**/.gitkeep
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.npz
+.venv/
+venv/
+wandb/
+
+# Local MetaDrive clone (install via pip: metadrive-simulator or pip install -e ./metadrive)
+metadrive/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.egg-info/
+.pytest_cache/

@@ -1,0 +1,45 @@
+# Main training / experiment config
+
+experiment_name: wm_metadrive_v0
+seed: 0
+device: cuda   # cuda | cpu
+
+# Paths
+paths:
+  checkpoint_dir: checkpoints
+  log_dir: logs
+  buffer_dir: data/replay_buffer
+  rollout_dir: data/raw_rollouts
+
+# Logging
+wandb:
+  enabled: false
+  project: worldmodel-metadrive
+  entity: null
+
+# Replay buffer
+buffer:
+  capacity: 100000        # transitions (tune down if RAM limited)
+  sequence_length: 64     # steps per sequence sample
+  batch_size: 16          # number of sequences per batch
+
+# Bootstrap data collection (Phase A)
+bootstrap:
+  num_steps: 20000
+  policy: random          # random | (later: ppo)
+  save_every: 5000
+
+# Online training loop (Phase B/C — stubs for now)
+train:
+  total_env_steps: 500000
+  train_every: 1
+  world_model_updates: 1
+  actor_critic_updates: 1
+  eval_every: 10000
+  checkpoint_every: 20000
+
+# Evaluation
+eval:
+  num_episodes: 20
+  start_seed: 10000       # hold-out map seeds (unseen in train)
+  deterministic: true
