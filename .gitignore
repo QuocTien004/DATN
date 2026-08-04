@@ -21,3 +21,6 @@ Thumbs.db
 .vscode/
 *.egg-info/
 .pytest_cache/
+
+.tools/
+
