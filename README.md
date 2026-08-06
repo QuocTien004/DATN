@@ -66,7 +66,7 @@ python scripts/train.py --config configs/train.yaml   # Phase B/C (đang skeleto
 python scripts/eval.py --config configs/train.yaml
 ```
 
-## Phân công nhóm (2 người)
+## Phân công (nhóm 2)
 
 Nhánh Git gợi ý: Người A → `Tien` · Người B → `Bao` · ghép chung → `main`.
 
