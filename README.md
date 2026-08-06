@@ -68,10 +68,42 @@ python scripts/eval.py --config configs/train.yaml
 
 ## Phân công (nhóm 2)
 
-| Vai trò | Module |
-|---------|--------|
-| World Model | `models/encoder.py`, `rssm.py`, `decoder.py`, `predictors.py`, `training/train_world_model.py` |
-| Actor-Critic & tích hợp | `models/actor_critic.py`, `training/train_agent.py`, `evaluation/`, baseline PPO/SAC |
+Nhánh Git gợi ý: Người A → `Tien` · Người B → `Bao` · ghép chung → `main`.
+
+### Người A — World Model
+
+**Công việc hiện tại (xây + tự test riêng, không cần Actor):**
+
+| # | Công việc | File | Xong khi nào (tự test) |
+|---|-----------|------|------------------------|
+| A1 | Collect bootstrap 20k–50k step (1 lần) | `scripts/collect_bootstrap.py` | Có `data/replay_buffer/bootstrap.npz` |
+| A2 | Encoder: CNN(ảnh) + MLP(state) → `e_t` | `models/encoder.py` | Shape `e_t` đúng, VD `(B, 512)` |
+| A3 | RSSM: `h_t`, posterior `z_t`, prior `ẑ_t` | `models/rssm.py` | `z`/`ẑ` shape `(B, 32, 32)` |
+| A4 | Decoder + Reward/Continue predictors | `models/decoder.py`, `models/predictors.py` | Forward ra được ảnh/reward/continue |
+| A5 | Vòng train WM trên buffer | `training/train_world_model.py` | Loss recon/KL chạy, không NaN; loss có giảm |
+| A6 | Lưu checkpoint WM | `utils/checkpoint.py`, `checkpoints/world_model/` | Có file `.pt` load lại được |
+
+Config liên quan: `configs/world_model.yaml`, `configs/train.yaml` (batch=16, seq=64).
+
+### Người B — Actor-Critic
+
+**Công việc hiện tại (xây + tự test riêng, chưa cần WM thật — dùng mock `(h,z)`):**
+
+| # | Công việc | File | Xong khi nào (tự test) |
+|---|-----------|------|------------------------|
+| B1 | Actor: `(h,z)` → action `(steering, throttle)` | `models/actor_critic.py` | Action shape `(B, 2)`, trong [-1, 1] |
+| B2 | Critic: `(h,z)` → value | `models/actor_critic.py` | Value shape `(B, 1)` hoặc `(B,)` |
+| B3 | Imagination loop (horizon 15) với **mock** `(h,z)` | `training/train_agent.py` | Chạy H bước không lỗi shape |
+| B4 | Loss / update Actor-Critic (trên rollout giả) | `training/train_agent.py` | `backward()` chạy được |
+| B5 | Eval script + metrics trên MetaDrive | `evaluation/evaluate.py`, `evaluation/metrics.py`, `scripts/eval.py` | Chạy được random/policy giả, in success/collision |
+
+Config liên quan: `configs/train.yaml` → `imagination_horizon` (trong `world_model.yaml`).
+
+### File dùng chung (không chia “của ai”, sửa có bàn nhau)
+
+`envs/metadrive_wrapper.py`, `utils/replay_buffer.py`, `training/collect.py`, `training/trainer.py`, `scripts/train.py`, `configs/env_metadrive.yaml`
+
+**Lưu ý data:** Người A lấy bootstrap (policy random) lúc đầu để train WM.
 
 ## Trạng thái hiện tại
 
