@@ -74,7 +74,7 @@ Nhánh Git gợi ý: Người A → `Tien` · Người B → `Bao` · ghép chun
 
 **Công việc hiện tại (xây + tự test riêng, không cần Actor):**
 
-| # | Công việc | File | Xong khi nào (tự test) |
+| # | Công việc | File | Mục tiêu |
 |---|-----------|------|------------------------|
 | A1 | Collect bootstrap 20k–50k step (1 lần) | `scripts/collect_bootstrap.py` | Có `data/replay_buffer/bootstrap.npz` |
 | A2 | Encoder: CNN(ảnh) + MLP(state) → `e_t` | `models/encoder.py` | Shape `e_t` đúng, VD `(B, 512)` |
@@ -89,7 +89,7 @@ Config liên quan: `configs/world_model.yaml`, `configs/train.yaml` (batch=16, s
 
 **Công việc hiện tại (xây + tự test riêng, chưa cần WM thật — dùng mock `(h,z)`):**
 
-| # | Công việc | File | Xong khi nào (tự test) |
+| # | Công việc | File | Mục tiêu |
 |---|-----------|------|------------------------|
 | B1 | Actor: `(h,z)` → action `(steering, throttle)` | `models/actor_critic.py` | Action shape `(B, 2)`, trong [-1, 1] |
 | B2 | Critic: `(h,z)` → value | `models/actor_critic.py` | Value shape `(B, 1)` hoặc `(B,)` |
