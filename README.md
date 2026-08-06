@@ -99,8 +99,7 @@ Config liên quan: `configs/world_model.yaml`, `configs/train.yaml` (batch=16, s
 
 Config liên quan: `configs/train.yaml` → `imagination_horizon` (trong `world_model.yaml`).
 
-### File dùng chung (không chia “của ai”, sửa có bàn nhau)
-
+### File chung
 `envs/metadrive_wrapper.py`, `utils/replay_buffer.py`, `training/collect.py`, `training/trainer.py`, `scripts/train.py`, `configs/env_metadrive.yaml`
 
 **Lưu ý data:** Người A lấy bootstrap (policy random) lúc đầu để train WM.
