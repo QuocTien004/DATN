@@ -1,0 +1,11 @@
+# Optional: install CUDA PyTorch + project deps in one go (venv).
+# Usage:
+#   pip install -r requirements-cuda.txt
+#
+# Needs NVIDIA driver. Uses official cu124 wheels.
+
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch
+torchvision
+torchaudio
+-r requirements.txt

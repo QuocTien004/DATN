@@ -1,4 +1,6 @@
 # Main training / experiment config
+# Laptop defaults (GTX 1650 4GB): batch 8, seq 32
+# Design reference (paper-style): batch 16, seq 64
 
 experiment_name: wm_metadrive_v0
 seed: 0
@@ -19,15 +21,21 @@ wandb:
 
 # Replay buffer
 buffer:
-  capacity: 100000        # transitions (tune down if RAM limited)
-  sequence_length: 64     # steps per sequence sample
-  batch_size: 16          # number of sequences per batch
+  capacity: 25000         # laptop-friendly with 256x256 RGB (~4GB images)
+  sequence_length: 32     # WM sample length (ref: 64; 32 = faster on 1650)
 
 # Bootstrap data collection (Phase A)
 bootstrap:
   num_steps: 20000
   policy: random          # random | (later: ppo)
   save_every: 5000
+
+# World Model offline training on bootstrap buffer (A5-A6)
+wm_train:
+  updates: 5000           # practical Phase A length with seq 32
+  batch_size: 8           # ref: 16
+  log_every: 20
+  checkpoint_every: 500
 
 # Online training loop (Phase B/C — stubs for now)
 train:

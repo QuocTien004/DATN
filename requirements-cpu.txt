@@ -1,0 +1,8 @@
+# Optional: full pin file for CPU-only machines (no NVIDIA / no CUDA torch).
+# Usage:
+#   pip install -r requirements-cpu.txt
+
+torch
+torchvision
+torchaudio
+-r requirements.txt

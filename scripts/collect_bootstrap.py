@@ -80,8 +80,13 @@ def main() -> None:
         boot_cfg = train_cfg.get("bootstrap", {})
         num_steps = int(args.steps if args.steps is not None else boot_cfg.get("num_steps", 20000))
 
+        # Capacity = collect size (not 100k): 100k×256² RGB ≈ 18GB RAM and OOMs on laptop GPUs/hosts.
+        cfg_cap = int(buf_cfg.get("capacity", 100_000))
+        capacity = min(cfg_cap, num_steps + 100)
+        print(f"ReplayBuffer capacity={capacity} (requested steps={num_steps})")
+
         buffer = ReplayBuffer(
-            capacity=int(buf_cfg.get("capacity", 100_000)),
+            capacity=capacity,
             image_shape=tuple(image.shape),
             state_dim=int(state.shape[0]),
             action_dim=action_dim,
@@ -101,7 +106,7 @@ def main() -> None:
             / "bootstrap.npz"
         )
         saved = buffer.save(out)
-        print(f"Saved buffer ({len(buffer)} transitions) → {saved}")
+        print(f"Saved buffer ({len(buffer)} transitions) -> {saved}")
         print(f"Buffer summary: {buffer.summary()}")
     finally:
         env.close()
