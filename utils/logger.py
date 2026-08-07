@@ -41,7 +41,7 @@ class Logger:
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
         msg = " | ".join(f"{k}={v}" for k, v in metrics.items())
         prefix = f"step={step} | " if step is not None else ""
-        print(f"[log] {prefix}{msg}")
+        print(f"[log] {prefix}{msg}", flush=True)
         if self._wandb is not None:
             self._wandb.log(metrics, step=step)
 
