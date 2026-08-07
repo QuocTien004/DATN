@@ -31,15 +31,15 @@ checkpoints/   weights (gitignored)
 
 ## Hyperparameters
 
-| | Train (laptop) | Reference |
-|--|----------------|-----------|
-| Image | 256×256 RGB | — |
-| Latent | categorical 32×32 | DreamerV3-style |
-| `batch_size` | 8 | 16 |
-| `sequence_length` | 32 | 64 |
-| WM `updates` | 5000 | — |
-| Bootstrap steps | 20000 | — |
-| Device | `cuda` | — |
+| Parameter | Value |
+|-----------|-------|
+| Image | 256×256 RGB |
+| Latent | categorical 32×32 |
+| `batch_size` | 8 |
+| `sequence_length` | 32 |
+| WM `updates` | 5000 |
+| Bootstrap steps | 20000 |
+| Device | `cuda` |
 
 See `configs/train.yaml`, `configs/world_model.yaml`, `configs/env_metadrive.yaml`.
 
