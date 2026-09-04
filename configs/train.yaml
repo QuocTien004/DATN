@@ -4,7 +4,7 @@
 
 experiment_name: wm_metadrive_v0
 seed: 0
-device: cuda   # cuda | cpu
+device: cpu    # cuda | cpu; override with --device when needed
 
 # Paths
 paths:
@@ -34,6 +34,28 @@ bootstrap:
 wm_train:
   updates: 5000           # practical Phase A length with seq 32
   batch_size: 8           # ref: 16
+  log_every: 20
+  checkpoint_every: 500
+
+# Actor-Critic trained from posterior states with differentiable RSSM imagination.
+actor_critic:
+  actor_hidden: [512, 512]
+  critic_hidden: [512, 512]
+  action_low: -1.0          # MetaDrive steering/throttle lower bound
+  action_high: 1.0         # MetaDrive steering/throttle upper bound
+  init_std: 0.5            # initial unsquashed Normal exploration std
+  min_std: 0.1
+  max_std: 1.0
+  imagination_horizon: 15
+  gamma: 0.997             # discount_t = gamma * predicted continue probability
+  lambda: 0.95
+  entropy_scale: 1.0e-4
+  actor_lr: 8.0e-5
+  critic_lr: 8.0e-5
+  grad_clip: 100.0
+  updates: 10000
+  batch_size: 8
+  max_start_states: 64     # subsample B*T posteriors to cap imagination memory
   log_every: 20
   checkpoint_every: 500
 

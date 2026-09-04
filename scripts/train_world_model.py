@@ -22,13 +22,10 @@ for _p in (str(_ROOT), str(_ROOT / "metadrive")):
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "metadrive"))
 
-import numpy as np
 import torch
 
-from models.decoder import Decoder
-from models.encoder import Encoder
-from models.predictors import ContinuePredictor, RewardPredictor
-from models.rssm import RSSM
+from models.world_model import build_world_model
+from training.batches import replay_batch_to_torch
 from training.train_world_model import train_world_model_step
 from utils.checkpoint import load_checkpoint, save_checkpoint
 from utils.config import load_experiment_configs
@@ -72,46 +69,8 @@ def _resolve_device(name: str | None) -> torch.device:
     return torch.device(name)
 
 
-def batch_to_torch(
-    batch: dict[str, np.ndarray],
-    device: torch.device,
-) -> dict[str, torch.Tensor]:
-    """Convert numpy batch (image HWC uint8) -> torch (B,T,C,H,W) float."""
-    img = batch["image"]  # (B, T, H, W, C)
-    if img.ndim != 5:
-        raise ValueError(f"Expected image (B,T,H,W,C), got {img.shape}")
-    image = torch.from_numpy(img).to(device=device, dtype=torch.float32) / 255.0
-    image = image.permute(0, 1, 4, 2, 3).contiguous()  # B,T,C,H,W
-
-    return {
-        "image": image,
-        "state": torch.from_numpy(batch["state"]).to(device=device, dtype=torch.float32),
-        "action": torch.from_numpy(batch["action"]).to(device=device, dtype=torch.float32),
-        "reward": torch.from_numpy(batch["reward"]).to(device=device, dtype=torch.float32),
-        "done": torch.from_numpy(batch["done"].astype(np.bool_)).to(device=device),
-    }
-
-
 def build_models(wm_cfg: dict, image_shape: tuple, state_dim: int, action_dim: int, device: torch.device):
-    enc = Encoder(wm_cfg, state_dim=state_dim, image_shape=image_shape).to(device)
-    rssm = RSSM(wm_cfg, embed_dim=enc.embed_dim, action_dim=action_dim).to(device)
-    dec = Decoder(
-        wm_cfg,
-        deter_dim=rssm.deter_dim,
-        stoch_size=rssm.stoch_size,
-        image_shape=image_shape,
-        state_dim=state_dim,
-    ).to(device)
-    reward = RewardPredictor(wm_cfg, rssm.deter_dim, rssm.stoch_size).to(device)
-    cont = ContinuePredictor(wm_cfg, rssm.deter_dim, rssm.stoch_size).to(device)
-    models = {
-        "encoder": enc,
-        "rssm": rssm,
-        "decoder": dec,
-        "reward": reward,
-        "continue": cont,
-    }
-    return models
+    return build_world_model(wm_cfg, image_shape, state_dim, action_dim, device)
 
 
 def main() -> None:
@@ -203,7 +162,7 @@ def main() -> None:
             if device.type == "cuda":
                 torch.cuda.empty_cache()
             raw = buffer.sample(batch_size, include_next=False)
-        batch = batch_to_torch(raw, device)
+        batch = replay_batch_to_torch(raw, device)
         del raw
         metrics = train_world_model_step(batch, models, optimizer, wm_cfg)
         del batch
