@@ -39,7 +39,7 @@ checkpoints/   weights (gitignored)
 | `sequence_length` | 32 |
 | WM `updates` | 5000 |
 | Bootstrap steps | 20000 |
-| Device | `cuda` |
+| Device | `cpu` mặc định; có thể override `--device cuda` |
 
 See `configs/train.yaml`, `configs/world_model.yaml`, `configs/env_metadrive.yaml`.
 
@@ -63,17 +63,27 @@ python scripts/train_world_model.py --config configs/train.yaml --device cuda --
 
 Checkpoints: `checkpoints/world_model/`.
 
-## Train agent / eval (skeleton)
+## Train Actor-Critic / evaluate
 
 ```bash
-python scripts/train.py --config configs/train.yaml
-python scripts/eval.py --config configs/train.yaml
+python scripts/train.py --config configs/train.yaml --device cpu \
+  --buffer data/replay_buffer/bootstrap.npz \
+  --wm-checkpoint checkpoints/world_model/latest.pt
+python scripts/train.py --config configs/train.yaml --device cpu \
+  --resume checkpoints/actor_critic/latest.pt
+python scripts/eval.py --config configs/train.yaml --device cpu \
+  --checkpoint checkpoints/actor_critic/latest.pt \
+  --wm-checkpoint checkpoints/world_model/latest.pt
 ```
+
+Xem [ghi chú tích hợp Phase C](docs/phase_c.md) để biết contract
+Replay/World Model, checkpoint, kết quả smoke test thật và cách chạy trên Colab.
 
 ## Status
 
 - [x] Env wrapper, replay buffer, bootstrap collect  
 - [x] World Model (Encoder / RSSM / Decoder / predictors) + train loop  
 - [x] Converged WM checkpoint (`checkpoints/world_model/latest.pt`)  
-- [ ] Actor-Critic imagination training  
-- [ ] Hold-out evaluation & report  
+- [x] Actor-Critic imagination training pipeline
+- [x] Recurrent Actor evaluation on hold-out seeds
+- [ ] Long training run & evaluation report

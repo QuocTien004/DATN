@@ -10,13 +10,20 @@ def _cat_state_action(z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
     return torch.cat([z.reshape(z.shape[0], -1), action], dim=-1)
 
 
-def sample_categorical(logits: torch.Tensor) -> torch.Tensor:
+def sample_categorical(
+    logits: torch.Tensor, *, deterministic: bool = False
+) -> torch.Tensor:
     """
     Sample one-hot from logits (B, G, C) with straight-through gradient.
     """
     probs = F.softmax(logits, dim=-1)
-    flat = probs.reshape(-1, probs.shape[-1])
-    idx = torch.multinomial(flat, num_samples=1).reshape(probs.shape[0], probs.shape[1])
+    if deterministic:
+        idx = probs.argmax(dim=-1)
+    else:
+        flat = probs.reshape(-1, probs.shape[-1])
+        idx = torch.multinomial(flat, num_samples=1).reshape(
+            probs.shape[0], probs.shape[1]
+        )
     hard = F.one_hot(idx, num_classes=probs.shape[-1]).to(dtype=logits.dtype)
     # Straight-through: forward hard, backward as soft probs
     return hard + probs - probs.detach()
@@ -80,6 +87,8 @@ class RSSM(nn.Module):
         prev_state: dict[str, torch.Tensor],
         action: torch.Tensor,
         embed: torch.Tensor,
+        *,
+        deterministic: bool = False,
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """
         Posterior step (has observation embedding).
@@ -94,7 +103,7 @@ class RSSM(nn.Module):
         post_logits = self._logits_to_grouped(
             self.posterior_net(torch.cat([h, embed], dim=-1))
         )
-        z = sample_categorical(post_logits)
+        z = sample_categorical(post_logits, deterministic=deterministic)
         state = {"h": h, "z": z}
         stats = {"prior_logits": prior_logits, "posterior_logits": post_logits}
         return state, stats
