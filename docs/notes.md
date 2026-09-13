@@ -1,0 +1,10 @@
+| # | Test | Ý nghĩa |
+|---|---|---|
+| 1 | `test_actor_and_critic_shapes_ranges_and_finiteness` | Kiểm tra Actor nhận latent `h/z`, trả action 2 chiều, `log_prob`, entropy đúng shape; action hữu hạn và nằm trong `[-1,1]`. Critic phải trả đúng một scalar cho mỗi sample. Gọi deterministic hai lần phải cho cùng action. |
+| 2 | `test_lambda_return_hand_computed_case` | Dùng ví dụ 2 bước có thể tính tay để kiểm tra công thức λ-return, discount, bootstrap và chiều thời gian. Expected target chính xác là `[2.75, 4.0]`. |
+| 3 | `test_imagination_and_update_change_only_actor_critic` | Rollout qua fake World Model trong 3 bước, kiểm tra toàn bộ time dimension. Sau một update, tham số Actor và Critic phải đổi, mọi metric phải finite, còn tham số World Model phải giữ nguyên tuyệt đối. Đây là test quan trọng nhất về freeze và gradient. |
+| 4 | `test_real_rssm_imagination_smoke` | Thay fake dynamics bằng RSSM, RewardPredictor và ContinuePredictor thật nhưng kích thước nhỏ. Xác minh Actor-Critic thực sự tương thích với GRU/categorical latent của repo. |
+| 5 | `test_posterior_start_state_extraction` | Đưa sequence ảnh/state/action qua Encoder + `RSSM.observe_step`, lấy posterior làm điểm bắt đầu imagination. Kiểm tra subsample đúng 4 state, shape `h/z` đúng và kết quả đã detach. |
+| 6 | `test_evaluate_policy_resets_state_and_aggregates_returns` | Dùng environment giả gồm 3 episode. Kiểm tra recurrent policy được reset đúng 3 lần và success/crash/return/episode length được tổng hợp chính xác. |
+| 7 | `test_latent_policy_observation_to_action_smoke` | Chạy đường đi gần evaluation thật: raw ảnh HWC + state vector → Encoder → RSSM posterior → deterministic Actor → NumPy action. Kiểm tra action finite, đúng shape/range và sau reset thì observation đầu tiên sinh lại đúng action cũ. |
+| 8 | `test_one_offline_update_and_checkpoint` | Tạo replay buffer nhỏ, World Model thật kích thước nhỏ và chạy `Trainer.fit()` một update CPU. Kiểm tra metrics finite, `latest.pt` được tạo, load đọc được, `step=1` và có Actor-Critic state dict. |
