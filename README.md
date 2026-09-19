@@ -76,8 +76,22 @@ python scripts/eval.py --config configs/train.yaml --device cpu \
   --wm-checkpoint checkpoints/world_model/latest.pt
 ```
 
-Xem [ghi chú tích hợp Phase C](docs/phase_c.md) để biết contract
-Replay/World Model, checkpoint, kết quả smoke test thật và cách chạy trên Colab.
+## Online RL Training (DreamerV3)
+
+Vòng lặp Online RL kết hợp: **Collect env steps → Train World Model → Train Actor-Critic (Imagination) → Periodic Eval**.
+
+```bash
+# Huấn luyện chính thức trên GPU (500k steps)
+python scripts/train_online.py --device cuda --total-steps 500000 --steps-per-iter 1000 --ckpt-dir checkpoints/exp_official_01
+
+# Khôi phục nếu bị gián đoạn (Resume)
+python scripts/train_online.py --device cuda --resume checkpoints/exp_official_01/online/latest.pt --ckpt-dir checkpoints/exp_official_01
+
+# Vẽ biểu đồ metrics thời gian thực
+python scripts/plot_metrics.py
+```
+
+Xem chi tiết tại [Hướng dẫn huấn luyện Online RL](docs/TRAINING_GUIDE.md).
 
 ## Status
 
