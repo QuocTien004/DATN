@@ -1,8 +1,9 @@
-﻿checkpoints/
+checkpoints/
 logs/
 data/**
 !data/**/
 !data/**/.gitkeep
+*.mmap
 __pycache__/
 *.pyc
 .ipynb_checkpoints/

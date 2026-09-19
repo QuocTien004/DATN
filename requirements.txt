@@ -1,15 +1,10 @@
-# World Model + MetaDrive dependencies
+# World Model + MetaDrive Dependencies
 #
-# PyTorch: cài RIÊNG trong venv (chọn 1 dòng dưới), rồi mới:
-#   pip install -r requirements.txt
+# Note: Install PyTorch first depending on your system:
+#   GPU (CUDA 12.4): pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+#   CPU:            pip install torch torchvision torchaudio
 #
-# GPU (CUDA 12.4) — khuyến nghị nếu có NVIDIA (vd. GTX 1650):
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-#
-# CPU only:
-#   pip install torch torchvision torchaudio
-#
-# Không pin torch ở dưới để tránh pip kéo nhầm bản CPU từ PyPI.
+# Then run: pip install -r requirements.txt
 
 metadrive-simulator>=0.4.3
 numpy>=1.24.0

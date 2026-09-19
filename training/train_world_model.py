@@ -44,7 +44,7 @@ def train_world_model_step(
     continue_pred = models["continue"]
 
     train_cfg = cfg.get("training", {})
-    free_nats = float(train_cfg.get("free_nats", 1.0))
+    free_nats = float(train_cfg.get("free_nats", 0.1))
     kl_balance = float(train_cfg.get("kl_balance", 0.8))
     grad_clip = float(train_cfg.get("grad_clip", 1000.0))
 
@@ -53,6 +53,7 @@ def train_world_model_step(
     action = batch["action"]
     reward = batch["reward"]
     done = batch["done"].float()
+    is_first = batch["is_first"].float() if "is_first" in batch else None
 
     B, T = image.shape[:2]
     device = image.device
@@ -68,8 +69,9 @@ def train_world_model_step(
 
     zero_action = torch.zeros(B, action.shape[-1], device=device)
     for t in range(T):
+        first_t = is_first[:, t] if is_first is not None else None
         a_tm1 = zero_action if t == 0 else action[:, t - 1]
-        prev, stats = rssm.observe_step(prev, a_tm1, e[:, t])
+        prev, stats = rssm.observe_step(prev, a_tm1, e[:, t], is_first=first_t)
         posts_h.append(prev["h"])
         posts_z.append(prev["z"])
         prior_logits_seq.append(stats["prior_logits"])
@@ -93,17 +95,26 @@ def train_world_model_step(
 
     loss_recon_img = F.mse_loss(recon_image, image)
     loss_recon_state = F.mse_loss(recon_state, state)
-    loss_reward = F.mse_loss(pred_reward, reward)
-    loss_continue = F.binary_cross_entropy_with_logits(pred_cont_logit, target_cont)
+    sym_reward = torch.sign(reward) * torch.log1p(torch.abs(reward))
+    # Weight negative rewards (crashes) by 5.0x to prevent smoothing away penalties
+    rew_weight = torch.where(sym_reward < 0.0, 5.0, 1.0)
+    loss_reward = ((pred_reward - sym_reward).square() * rew_weight).mean()
+    
+    # Weight terminal transitions (target_cont=0.0) by 15.0x to counteract 31:1 imbalance
+    cont_weight = torch.where(target_cont == 0.0, 15.0, 1.0)
+    bce_continue = F.binary_cross_entropy_with_logits(
+        pred_cont_logit, target_cont, reduction="none"
+    )
+    loss_continue = (bce_continue * cont_weight).mean()
 
-    kl_post_prior = _kl_cat(
+    kl_post_prior_raw = _kl_cat(
         _flatten_time(post_logits), _flatten_time(prior_logits).detach()
     )
-    kl_prior_post = _kl_cat(
+    kl_prior_post_raw = _kl_cat(
         _flatten_time(post_logits).detach(), _flatten_time(prior_logits)
     )
-    kl_post_prior = torch.clamp(kl_post_prior, min=free_nats).mean()
-    kl_prior_post = torch.clamp(kl_prior_post, min=free_nats).mean()
+    kl_post_prior = torch.clamp(kl_post_prior_raw, min=free_nats).mean()
+    kl_prior_post = torch.clamp(kl_prior_post_raw, min=free_nats).mean()
     loss_kl = kl_balance * kl_post_prior + (1.0 - kl_balance) * kl_prior_post
 
     loss = (
@@ -129,4 +140,5 @@ def train_world_model_step(
         "loss_reward": float(loss_reward.detach()),
         "loss_continue": float(loss_continue.detach()),
         "loss_kl": float(loss_kl.detach()),
+        "loss_kl_raw": float(kl_post_prior_raw.mean().detach()),
     }

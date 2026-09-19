@@ -1,0 +1,44 @@
+# MetaDrive Environment Config - Stage 2 (Advanced / Hard Scenarios)
+# 
+# Purpose:
+#   Dùng cho Giai đoạn 2 của Online Training (chạy tiếp tục sau khi Giai đoạn 1 đạt kết quả tốt).
+#   Tăng độ khó môi trường để rèn luyện phản xạ né tai nạn và xử lý tình huống bất ngờ.
+
+seed: 0
+num_scenarios: 100
+start_seed: 5000         # Dùng tập bản đồ mới (chưa gặp ở Giai đoạn 1)
+
+# Rendering
+use_render: false
+
+# Observation: 1 RGB Camera
+image_observation: true
+image_source: rgb_camera
+image_height: 256
+image_width: 256
+stack_size: 1
+
+# Asset quality
+disable_model_compression: true
+show_skybox: true
+show_terrain: true
+
+# Episode / Traffic - NÂNG CAO CHO GIAI ĐOẠN 2
+horizon: 1000
+traffic_density: 0.25     # Tăng mật độ giao thông đông gấp 2.5 lần Giai đoạn 1 (0.1 -> 0.25)
+accident_prob: 0.15      # 15% xác suất xe khác phanh gấp / tạt đầu / va chạm bất ngờ
+
+# Vehicle / action
+manual_control: false
+controller: default
+decision_repeat: 5
+
+# Reward function
+use_custom_reward: true
+reward:
+  success: 10.0
+  out_of_road: -10.0
+  crash_vehicle: -10.0
+  crash_object: -10.0
+  speed_reward: 0.1
+  driving_reward: 1.0

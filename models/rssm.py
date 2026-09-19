@@ -88,16 +88,28 @@ class RSSM(nn.Module):
         action: torch.Tensor,
         embed: torch.Tensor,
         *,
+        is_first: torch.Tensor | None = None,
         deterministic: bool = False,
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """
         Posterior step (has observation embedding).
+        Resets prev_state to initial state where is_first == True.
 
         Returns
         -------
         state : {h, z}
         stats : {prior_logits, posterior_logits}  each (B, G, C)
         """
+        if is_first is not None:
+            mask = is_first.float().reshape(-1, 1)
+            h_prev = (1.0 - mask) * prev_state["h"]
+            z_mask = mask.unsqueeze(-1)
+            z_init = torch.zeros_like(prev_state["z"])
+            z_init[..., 0] = 1.0
+            z_prev = (1.0 - z_mask) * prev_state["z"] + z_mask * z_init
+            prev_state = {"h": h_prev, "z": z_prev}
+            action = (1.0 - mask) * action
+
         h = self._deter_step(prev_state, action)
         prior_logits = self._logits_to_grouped(self.prior_net(h))
         post_logits = self._logits_to_grouped(

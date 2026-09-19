@@ -21,8 +21,9 @@ wandb:
 
 # Replay buffer
 buffer:
-  capacity: 25000         # laptop-friendly with 256x256 RGB (~4GB images)
+  capacity: 100000        # increased: 25k too small, old episodes lost after ~25 iterations
   sequence_length: 32     # WM sample length (ref: 64; 32 = faster on 1650)
+  term_ratio: 0.25        # 25% terminal sequence ratio to balance crash steps
 
 # Bootstrap data collection (Phase A)
 bootstrap:
@@ -44,15 +45,15 @@ actor_critic:
   action_low: -1.0          # MetaDrive steering/throttle lower bound
   action_high: 1.0         # MetaDrive steering/throttle upper bound
   init_std: 0.5            # initial unsquashed Normal exploration std
-  min_std: 0.1
+  min_std: 0.30            # raised min_std to prevent policy entropy collapse
   max_std: 1.0
-  imagination_horizon: 15
-  gamma: 0.997             # discount_t = gamma * predicted continue probability
+  imagination_horizon: 30  # extended horizon (~3.0s) so Actor sees crashes at step 35-50
+  gamma: 0.997             # restored long-horizon discount (~333 steps) paired with DreamerV3 return normalization
   lambda: 0.95
-  entropy_scale: 1.0e-4
-  actor_lr: 8.0e-5
-  critic_lr: 8.0e-5
-  grad_clip: 100.0
+  entropy_scale: 0.035     # tuned entropy scale to maintain exploration & avoid throttle saturation
+  actor_lr: 3.0e-5         # stabilized learning rate for Actor
+  critic_lr: 3.0e-5        # stabilized learning rate for Critic
+  grad_clip: 10.0          # tight gradient clipping to prevent explosion
   updates: 10000
   batch_size: 8
   max_start_states: 64     # subsample B*T posteriors to cap imagination memory
@@ -63,8 +64,8 @@ actor_critic:
 train:
   total_env_steps: 500000
   train_every: 1
-  world_model_updates: 1
-  actor_critic_updates: 1
+  world_model_updates: 25
+  actor_critic_updates: 25
   eval_every: 10000
   checkpoint_every: 20000
 

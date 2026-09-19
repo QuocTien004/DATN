@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from math import log
 from typing import Any
@@ -111,6 +112,8 @@ class Actor(nn.Module):
             stoch_size=self.stoch_size,
         )
         mean, log_std = self.net(feature).chunk(2, dim=-1)
+        # Clamp pre-tanh mean to [-2.0, 2.0] to avoid tanh gradient saturation
+        mean = torch.clamp(mean, -2.0, 2.0)
         log_std = log_std.clamp(log(self.min_std), log(self.max_std))
         std = log_std.exp()
         distribution = Normal(mean, std)
@@ -126,9 +129,9 @@ class Actor(nn.Module):
         log_prob = (
             distribution.log_prob(pre_tanh) - torch.log(jacobian + 1e-6)
         ).sum(dim=-1)
-        # The squashed distribution has no simple analytic entropy. -log pi(a|s)
-        # is an unbiased one-sample estimate when actions are stochastic.
-        entropy = -log_prob
+        # Standard DreamerV3 Gaussian entropy (sum over action dimensions).
+        # Avoids tanh change-of-variable singularities when actions approach +/- 1.
+        entropy = distribution.entropy().sum(dim=-1)
         return PolicyOutput(
             action=action,
             log_prob=log_prob,
@@ -147,6 +150,12 @@ class Critic(nn.Module):
         self.stoch_size = int(stoch_size)
         hidden = [int(x) for x in cfg.get("critic_hidden", [512, 512])]
         self.net = _mlp(self.deter_dim + self.stoch_size, hidden, 1)
+
+        # Zero-initialize the critic head for stable early value estimation
+        head = self.net[-1]
+        assert isinstance(head, nn.Linear)
+        nn.init.zeros_(head.weight)
+        nn.init.zeros_(head.bias)
 
     def forward(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         feature = latent_feature(
@@ -176,6 +185,12 @@ class ActorCritic(nn.Module):
         self.action_dim = int(action_dim)
         self.actor = Actor(ac_cfg, deter_dim, stoch_size, action_dim)
         self.critic = Critic(ac_cfg, deter_dim, stoch_size)
+        self.slow_critic = copy.deepcopy(self.critic)
+        for parameter in self.slow_critic.parameters():
+            parameter.requires_grad_(False)
+        self.register_buffer("ret_p95", torch.tensor(0.0))
+        self.register_buffer("ret_p05", torch.tensor(0.0))
+        self.register_buffer("ema_initialized", torch.tensor(0, dtype=torch.uint8))
 
     def act(
         self,
@@ -187,3 +202,27 @@ class ActorCritic(nn.Module):
 
     def value(self, state: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.critic(state["h"], state["z"])
+
+    def slow_value(self, state: dict[str, torch.Tensor]) -> torch.Tensor:
+        return self.slow_critic(state["h"], state["z"])
+
+    def update_slow_critic(self, tau: float = 0.02) -> None:
+        """Polyak EMA update for Slow Critic parameters."""
+        with torch.no_grad():
+            for target_param, source_param in zip(
+                self.slow_critic.parameters(), self.critic.parameters()
+            ):
+                target_param.data.mul_(1.0 - tau).add_(source_param.data, alpha=tau)
+
+    def load_state_dict(self, state_dict: dict[str, Any], strict: bool = True):
+        # Backward compatibility for checkpoints saved before slow_critic
+        if not any(k.startswith("slow_critic.") for k in state_dict.keys()):
+            res = super().load_state_dict(state_dict, strict=False)
+            self.slow_critic.load_state_dict(self.critic.state_dict())
+            for parameter in self.slow_critic.parameters():
+                parameter.requires_grad_(False)
+            return res
+        res = super().load_state_dict(state_dict, strict=strict)
+        for parameter in self.slow_critic.parameters():
+            parameter.requires_grad_(False)
+        return res
