@@ -26,6 +26,7 @@ class ImaginedTrajectory:
     value: torch.Tensor  # (H + 1, B)
     log_prob: torch.Tensor  # (H, B)
     entropy: torch.Tensor  # (H, B)
+    std: torch.Tensor  # (H, B, action_dim)
 
 
 def _unique_modules(modules: Iterable[nn.Module]) -> list[nn.Module]:
@@ -83,9 +84,6 @@ def posterior_start_states(
         sequence_length,
     ):
         raise ValueError("Replay tensors must share batch and time dimensions")
-    if "done" in batch and torch.any(batch["done"][:, :-1]):
-        raise ValueError("Replay sequence crosses an episode boundary")
-
     with torch.no_grad():
         embedding = encoder(
             image.reshape(batch_size * sequence_length, *image.shape[2:]),
@@ -95,12 +93,15 @@ def posterior_start_states(
         zero_action = torch.zeros_like(action[:, 0])
         all_h: list[torch.Tensor] = []
         all_z: list[torch.Tensor] = []
+        is_first = batch.get("is_first", None)
         for time in range(sequence_length):
+            first_t = is_first[:, time] if is_first is not None else None
             previous_action = zero_action if time == 0 else action[:, time - 1]
             current, _stats = rssm.observe_step(
                 current,
                 previous_action,
                 embedding[:, time],
+                is_first=first_t,
             )
             all_h.append(current["h"])
             all_z.append(current["z"])
@@ -114,6 +115,12 @@ def posterior_start_states(
             indices = torch.randperm(h.shape[0], device=h.device)[:max_states]
             h, z = h[indices], z[indices]
     return {"h": h.detach(), "z": z.detach()}
+
+
+def symexp(x: torch.Tensor, max_val: float) -> torch.Tensor:
+    """Invert symlog with a strict clamping ceiling to prevent numerical explosion."""
+    clamped = torch.clamp(x, -max_val, max_val)
+    return torch.sign(clamped) * (torch.exp(torch.abs(clamped)) - 1.0)
 
 
 def imagine_rollout(
@@ -143,12 +150,17 @@ def imagine_rollout(
     values: list[torch.Tensor] = []
     log_probs: list[torch.Tensor] = []
     entropies: list[torch.Tensor] = []
+    stds: list[torch.Tensor] = []
 
     for _time in range(horizon):
-        values.append(actor_critic.value(current))
+        # Bootstrap values computed using Slow Critic with return cap ~700 (ln(701) = 6.55)
+        value_sym = actor_critic.slow_value(current)
+        values.append(symexp(value_sym, max_val=6.55))
         policy = actor_critic.act(current, deterministic=False)
         next_state, _stats = rssm.imagine_step(current, policy.action)
-        reward = reward_predictor(next_state["h"], next_state["z"]).squeeze(-1)
+        # Single-step reward capped at ~25.0 (ln(26) = 3.26)
+        reward_sym = reward_predictor(next_state["h"], next_state["z"]).squeeze(-1)
+        reward = symexp(reward_sym, max_val=3.26)
         continue_logit = continue_predictor(
             next_state["h"], next_state["z"]
         ).squeeze(-1)
@@ -159,11 +171,13 @@ def imagine_rollout(
         discounts.append(discount)
         log_probs.append(policy.log_prob)
         entropies.append(policy.entropy)
+        stds.append(policy.std)
         all_h.append(next_state["h"])
         all_z.append(next_state["z"])
         current = next_state
 
-    values.append(actor_critic.value(current))
+    value_sym = actor_critic.slow_value(current)
+    values.append(symexp(value_sym, max_val=6.55))
     trajectory = ImaginedTrajectory(
         h=torch.stack(all_h, dim=0),
         z=torch.stack(all_z, dim=0),
@@ -173,8 +187,9 @@ def imagine_rollout(
         value=torch.stack(values, dim=0),
         log_prob=torch.stack(log_probs, dim=0),
         entropy=torch.stack(entropies, dim=0),
+        std=torch.stack(stds, dim=0),
     )
-    for name in ("action", "reward", "discount", "value", "log_prob", "entropy"):
+    for name in ("action", "reward", "discount", "value", "log_prob", "entropy", "std"):
         tensor = getattr(trajectory, name)
         if not torch.isfinite(tensor).all():
             raise FloatingPointError(f"Non-finite values in imagined {name}")
@@ -277,7 +292,33 @@ def train_actor_critic_step(
             )
             weights = _continuation_weights(trajectory.discount).detach()
             weight_sum = weights.sum().clamp_min(1.0)
-            actor_objective = (weights * returns).sum() / weight_sum
+
+            ret_detach = returns.detach()
+            valid_mask = weights > 0.01
+            valid_returns = ret_detach[valid_mask]
+
+            if valid_returns.numel() > 0:
+                batch_p95 = torch.quantile(valid_returns, 0.95)
+                batch_p05 = torch.quantile(valid_returns, 0.05)
+            else:
+                batch_p95 = torch.tensor(0.0, device=returns.device)
+                batch_p05 = torch.tensor(0.0, device=returns.device)
+
+            if not actor_critic.ema_initialized.item() and valid_returns.numel() > 0:
+                actor_critic.ret_p95.copy_(batch_p95.detach())
+                actor_critic.ret_p05.copy_(batch_p05.detach())
+                actor_critic.ema_initialized.fill_(1)
+            elif actor_critic.ema_initialized.item():
+                actor_critic.ret_p95.mul_(0.99).add_(batch_p95.detach() * 0.01)
+                actor_critic.ret_p05.mul_(0.99).add_(batch_p05.detach() * 0.01)
+
+            scale = (actor_critic.ret_p95 - actor_critic.ret_p05).clamp_min(1.0)
+            # Advantage = returns - baseline (detached value), centering gradients to prevent saturation
+            baseline = trajectory.value[:-1].detach()
+            advantages = returns - baseline
+            norm_advantages = advantages / scale
+
+            actor_objective = (weights * norm_advantages).sum() / weight_sum
             entropy = (weights * trajectory.entropy).sum() / weight_sum
             actor_loss = -actor_objective - entropy_scale * entropy
 
@@ -298,9 +339,14 @@ def train_actor_critic_step(
             ),
         ).reshape(horizon_size, batch_size)
         critic_target = returns.detach()
+        sym_target = torch.clamp(
+            torch.sign(critic_target) * torch.log1p(torch.abs(critic_target)),
+            -6.55,
+            6.55,
+        )
         critic_weights = weights.detach()
         critic_loss = (
-            critic_weights * F.mse_loss(critic_value, critic_target, reduction="none")
+            critic_weights * F.mse_loss(critic_value, sym_target, reduction="none")
         ).sum() / critic_weights.sum().clamp_min(1.0)
 
         critic_optimizer.zero_grad(set_to_none=True)
@@ -309,17 +355,19 @@ def train_actor_critic_step(
             actor_critic.critic.parameters(), grad_clip, error_if_nonfinite=True
         )
         critic_optimizer.step()
+        actor_critic.update_slow_critic(tau=0.02)
 
     return {
         "actor_loss": float(actor_loss.detach()),
         "critic_loss": float(critic_loss.detach()),
-        "imagined_reward_mean": float(trajectory.reward.detach().mean()),
-        "continue_mean": float((trajectory.discount.detach() / gamma).mean())
-        if gamma > 0.0
-        else 0.0,
-        "value_mean": float(critic_value.detach().mean()),
-        "lambda_return_mean": float(critic_target.mean()),
-        "entropy": float(trajectory.entropy.detach().mean()),
+        "imagined_reward_mean": float((trajectory.reward.detach() * weights).sum() / weight_sum),
+        "continue_mean": float((trajectory.discount.detach() * weights).sum() / weight_sum),
+        "value_mean": float((trajectory.value[:-1].detach() * weights).sum() / weight_sum),
+        "lambda_return_mean": float((returns.detach() * weights).sum() / weight_sum),
+        "entropy": float(entropy.detach()),
+        "policy_std": float(trajectory.std.detach().mean()),
+        "std_steering": float(trajectory.std.detach()[..., 0].mean()),
+        "std_throttle": float(trajectory.std.detach()[..., 1].mean()),
         "actor_grad_norm": float(actor_grad_norm.detach()),
         "critic_grad_norm": float(critic_grad_norm.detach()),
     }

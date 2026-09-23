@@ -91,6 +91,7 @@ def evaluate_policy(
             reset_policy()
         info_history = [info]
         crashed = False
+        out_of_road = False
         success = False
         done = False
         episode_return = 0.0
@@ -100,7 +101,13 @@ def evaluate_policy(
             action = policy_fn(obs)
             obs, reward, terminated, truncated, info = env.step(action)
             info_history.append(info)
-            crashed = crashed or bool(info.get("crash", False) or info.get("crash_vehicle", False))
+            crashed = crashed or bool(
+                info.get("crash", False)
+                or info.get("crash_vehicle", False)
+                or info.get("crash_object", False)
+                or info.get("out_of_road", False)
+            )
+            out_of_road = out_of_road or bool(info.get("out_of_road", False))
             success = success or bool(info.get("arrive_dest", False))
             episode_return += float(reward)
             episode_length += 1
@@ -111,6 +118,7 @@ def evaluate_policy(
                 info_history,
                 crashed=crashed,
                 success=success,
+                out_of_road=out_of_road,
                 episode_return=episode_return,
                 episode_length=episode_length,
             )

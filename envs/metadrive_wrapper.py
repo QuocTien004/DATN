@@ -44,6 +44,7 @@ class MetaDriveImageEnv:
     def __init__(self, env_cfg: dict[str, Any]) -> None:
         self.env_cfg = env_cfg
         self._env = None
+        self._last_route_completion = 0.0
         self._build_env()
 
     def _build_env(self) -> None:
@@ -80,6 +81,9 @@ class MetaDriveImageEnv:
             },
             "stack_size": int(self.env_cfg.get("stack_size", 1)),
         }
+        for k in ("driving_reward", "speed_reward", "use_lateral_reward"):
+            if k in self.env_cfg:
+                config[k] = self.env_cfg[k]
         self._env = MetaDriveEnv(config)
 
     @property
@@ -95,17 +99,36 @@ class MetaDriveImageEnv:
             obs, info = self._env.reset(seed=seed)
         else:
             obs, info = self._env.reset()
+        self._last_route_completion = float(info.get("route_completion", 0.0) or 0.0)
         return self._format_obs(obs), info
 
     def step(
         self, action: np.ndarray
     ) -> tuple[dict[str, np.ndarray], float, bool, bool, dict]:
         obs, reward, terminated, truncated, info = self._env.step(action)
-        if self.env_cfg.get("use_custom_reward", False):
-            shaped = apply_custom_reward(info, self.env_cfg.get("reward", {}))
-            # Keep env reward unless custom returns non-zero (skeleton returns 0).
+        vehicle = getattr(self._env, "agent", None) or getattr(self._env, "current_track_vehicle", None) or getattr(self._env, "vehicle", None)
+        if vehicle is not None and hasattr(vehicle, "navigation") and vehicle.navigation is not None:
+            try:
+                ref_lanes = vehicle.navigation.current_ref_lanes
+                current_lane = vehicle.lane if (hasattr(vehicle, "lane") and vehicle.lane in ref_lanes) else (ref_lanes[0] if ref_lanes else None)
+                if current_lane is not None:
+                    _, lat_now = current_lane.local_coordinates(vehicle.position)
+                    lane_w = float(vehicle.navigation.get_current_lane_width())
+                    lat_factor = max(0.0, 1.0 - 2.0 * abs(float(lat_now)) / max(lane_w, 1.0))
+                    info["lateral_factor"] = float(lat_factor)
+                    info["lateral_dist"] = float(abs(lat_now))
+            except Exception:
+                pass
+
+        if self.env_cfg.get("use_custom_reward", True):
+            shaped = apply_custom_reward(
+                info,
+                self.env_cfg.get("reward", {}),
+                last_route_completion=self._last_route_completion,
+            )
             if shaped != 0.0:
-                reward = shaped
+                reward = float(reward) + shaped
+        self._last_route_completion = float(info.get("route_completion", 0.0) or 0.0)
         done = bool(terminated or truncated)
         return self._format_obs(obs), float(reward), bool(terminated), bool(truncated), info
 

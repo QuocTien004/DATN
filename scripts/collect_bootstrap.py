@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--env-config", type=str, default=None)
     p.add_argument("--wm-config", type=str, default=None)
     p.add_argument("--steps", type=int, default=None, help="Override bootstrap.num_steps")
+    p.add_argument("--policy", type=str, default="mixed_expert", choices=["mixed_expert", "random"], help="Policy to collect bootstrap data")
     p.add_argument("--dry-run", action="store_true", help="Reset once and print obs shapes")
     p.add_argument("--out", type=str, default=None, help="Output .npz path for buffer")
     return p.parse_args()
@@ -93,11 +94,30 @@ def main() -> None:
             sequence_length=int(buf_cfg.get("sequence_length", 64)),
         )
 
+        if args.policy == "mixed_expert":
+            from metadrive.examples import expert
+            import numpy as np
+
+            def policy_fn(obs):
+                # 80% expert with slight noise, 20% random exploration
+                if np.random.rand() < 0.80:
+                    try:
+                        act = expert(env._env.agent, deterministic=False)
+                        act = np.asarray(act, dtype=np.float32)
+                        act[0] += np.random.randn() * 0.10  # slight steering noise
+                        return np.clip(act, -1.0, 1.0)
+                    except Exception:
+                        return random_action(env.action_space)
+                else:
+                    return random_action(env.action_space)
+        else:
+            policy_fn = lambda o: random_action(env.action_space)
+
         stats = collect_steps(
             env,
             buffer,
             num_steps=num_steps,
-            policy_fn=lambda o: random_action(env.action_space),
+            policy_fn=policy_fn,
         )
         logger.log(stats)
 

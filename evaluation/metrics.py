@@ -8,6 +8,8 @@ def compute_episode_metrics(
     *,
     crashed: bool,
     success: bool,
+    out_of_road: bool = False,
+    crash_vehicle: bool = False,
     episode_return: float = 0.0,
     episode_length: int | None = None,
 ) -> dict[str, float]:
@@ -18,6 +20,8 @@ def compute_episode_metrics(
     return {
         "success": 1.0 if success else 0.0,
         "collision": 1.0 if crashed else 0.0,
+        "out_of_road": 1.0 if out_of_road else 0.0,
+        "crash_vehicle": 1.0 if crash_vehicle else 0.0,
         "route_completion": route,
         "episode_return": float(episode_return),
         "episode_length": float(
@@ -33,6 +37,8 @@ def aggregate_episode_metrics(episodes: list[dict[str, float]]) -> dict[str, flo
             "success_rate": 0.0,
             "collision_rate": 0.0,
             "crash_rate": 0.0,
+            "out_of_road_rate": 0.0,
+            "crash_vehicle_rate": 0.0,
             "mean_route_completion": 0.0,
             "mean_episode_return": 0.0,
             "mean_episode_length": 0.0,
@@ -43,8 +49,11 @@ def aggregate_episode_metrics(episodes: list[dict[str, float]]) -> dict[str, flo
         "success_rate": sum(e["success"] for e in episodes) / n,
         "collision_rate": sum(e["collision"] for e in episodes) / n,
         "crash_rate": sum(e["collision"] for e in episodes) / n,
+        "out_of_road_rate": sum(e.get("out_of_road", 0.0) for e in episodes) / n,
+        "crash_vehicle_rate": sum(e.get("crash_vehicle", 0.0) for e in episodes) / n,
         "mean_route_completion": sum(e["route_completion"] for e in episodes) / n,
         "mean_episode_return": sum(e["episode_return"] for e in episodes) / n,
         "mean_episode_length": sum(e["episode_length"] for e in episodes) / n,
         "num_episodes": float(n),
     }
+

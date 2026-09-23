@@ -21,6 +21,7 @@ class Logger:
         self.experiment_name = experiment_name
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.jsonl_path = self.log_dir / "metrics.jsonl"
         self._wandb = None
 
         wandb_cfg = wandb_cfg or {}
@@ -39,9 +40,20 @@ class Logger:
                 print(f"[Logger] wandb init failed, continuing without it: {exc}")
 
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
+        import json
         msg = " | ".join(f"{k}={v}" for k, v in metrics.items())
         prefix = f"step={step} | " if step is not None else ""
         print(f"[log] {prefix}{msg}", flush=True)
+
+        entry = dict(metrics)
+        if step is not None:
+            entry["step"] = step
+        try:
+            with open(self.jsonl_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as exc:
+            pass
+
         if self._wandb is not None:
             self._wandb.log(metrics, step=step)
 

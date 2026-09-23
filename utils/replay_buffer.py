@@ -60,6 +60,49 @@ class ReplayBuffer:
     def __len__(self) -> int:
         return self.capacity if self.full else self.idx
 
+    # ------------------------------------------------------------------
+    # Online Training: convert read-only memmap to writable arrays
+    # ------------------------------------------------------------------
+    def make_writable(self, new_capacity: int | None = None) -> None:
+        """Copy read-only (memmap) arrays into writable numpy arrays.
+
+        If *new_capacity* exceeds the current size, all backing arrays are
+        expanded so that new transitions can be appended via :meth:`add`.
+        """
+        old_size = len(self)
+        new_cap = max(int(new_capacity or self.capacity), old_size)
+
+        def _expand(src: np.ndarray, shape: tuple, dtype) -> np.ndarray:
+            dst = np.zeros(shape, dtype=dtype)
+            dst[: src.shape[0]] = src[: src.shape[0]]
+            return dst
+
+        self.images = _expand(
+            self.images, (new_cap, *self.image_shape), np.uint8
+        )
+        self.states = _expand(self.states, (new_cap, self.state_dim), np.float32)
+        self.actions = _expand(
+            self.actions, (new_cap, self.action_dim), np.float32
+        )
+        self.rewards = _expand(self.rewards, (new_cap,), np.float32)
+        self.dones = _expand(self.dones, (new_cap,), np.bool_)
+
+        new_ep = np.ones((new_cap,), dtype=np.bool_)
+        new_ep[:old_size] = self.episode_start[:old_size]
+        self.episode_start = new_ep
+
+        self.capacity = new_cap
+        if self.full:
+            self.idx = old_size % new_cap
+            self.full = old_size >= new_cap
+        self._valid_starts_cache = None
+        self._valid_starts_key = None
+        self._sample_img_buf = None
+
+        # Drop stale memmap reference
+        if hasattr(self, "_mmap_path"):
+            del self._mmap_path
+
     def add(self, transition: Transition, *, is_first: bool = False) -> None:
         i = self.idx
         # Overwriting a slot: drop sparse terminal cache for that index
@@ -83,8 +126,9 @@ class ReplayBuffer:
 
     def _valid_start_indices(self) -> np.ndarray:
         """
-        Starts for sequences of length L that do not cross episode boundaries
-        and have a following frame for next_obs (or terminal next when done).
+        Starts for contiguous sequences of length L in the buffer.
+        Sequences may cross episode boundaries because `is_first` resets
+        the RSSM recurrent state.
         """
         n = len(self)
         L = self.sequence_length
@@ -94,19 +138,20 @@ class ReplayBuffer:
 
         if n < L:
             starts = np.array([], dtype=np.int64)
+        elif not self.full:
+            starts = np.arange(n - L + 1, dtype=np.int64)
         else:
-            max_start = n - L + 1
-            if self.full:
-                max_start = min(max_start, self.capacity - L + 1)
-            d = self.dones[:n].astype(np.int32)
-            prefix = np.concatenate([[0], np.cumsum(d)])
-            mid_done = prefix[L - 1 : L - 1 + max_start] > prefix[:max_start]
-            last = np.arange(max_start) + (L - 1)
-            last_done = d[last].astype(bool)
-            ok_next = last_done | ((last + 1) < n)
-            if self.full:
-                ok_next = last_done | ((last + 1) < self.capacity)
-            starts = np.flatnonzero((~mid_done) & ok_next).astype(np.int64)
+            # Full circular buffer: avoid crossing self.idx (write pointer)
+            all_starts = []
+            if self.idx >= L:
+                all_starts.append(np.arange(0, self.idx - L + 1))
+            if self.capacity - self.idx >= L:
+                all_starts.append(np.arange(self.idx, self.capacity - L + 1))
+            starts = (
+                np.concatenate(all_starts).astype(np.int64)
+                if all_starts
+                else np.array([], dtype=np.int64)
+            )
 
         self._valid_starts_cache = starts
         self._valid_starts_key = key
@@ -127,14 +172,31 @@ class ReplayBuffer:
         batch_size: int,
         *,
         include_next: bool = False,
+        term_ratio: float = 0.25,
     ) -> dict[str, np.ndarray]:
         starts = self._valid_start_indices()
         if len(starts) == 0:
             raise RuntimeError(
                 "Not enough contiguous sequences in buffer. Collect more data."
             )
-        chosen = np.random.choice(starts, size=batch_size, replace=len(starts) < batch_size)
         L = self.sequence_length
+        
+        # Identify terminal sequences (containing at least one done)
+        n = len(self)
+        dones_int = self.dones[:n].astype(np.int32)
+        prefix = np.concatenate([[0], np.cumsum(dones_int)])
+        has_done = (prefix[starts + L] - prefix[starts]) > 0
+        term_starts = starts[has_done]
+        
+        n_term = int(batch_size * term_ratio) if len(term_starts) > 0 else 0
+        n_norm = batch_size - n_term
+        
+        chosen_norm = np.random.choice(starts, size=n_norm, replace=len(starts) < n_norm)
+        if n_term > 0:
+            chosen_term = np.random.choice(term_starts, size=n_term, replace=len(term_starts) < n_term)
+            chosen = np.concatenate([chosen_norm, chosen_term])
+        else:
+            chosen = chosen_norm
 
         def gather(arr: np.ndarray) -> np.ndarray:
             # Preallocate one block (avoids list+stack peak / fragmentation)
@@ -159,6 +221,7 @@ class ReplayBuffer:
             "action": gather(self.actions),
             "reward": gather(self.rewards),
             "done": gather(self.dones),
+            "is_first": gather(self.episode_start),
         }
         # next_* copies many 256x256 frames; WM train does not need it
         if include_next:

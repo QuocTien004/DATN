@@ -21,6 +21,6 @@ predictors:
 training:
   lr: 1.0e-4
   grad_clip: 1000.0
-  free_nats: 1.0          # free bits / KL free nats
+  free_nats: 0.1           # lowered from 1.0 so KL divergence receives continuous gradients
   kl_balance: 0.8
   imagination_horizon: 15
