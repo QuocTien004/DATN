@@ -28,6 +28,7 @@ from utils.config import load_experiment_configs
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBuffer
 from utils.seed import set_seed
+from utils.online_state import require_current_contract
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,6 +110,7 @@ def main() -> None:
 
     print(f"Loading World Model: {wm_checkpoint_path}", flush=True)
     wm_checkpoint = load_checkpoint(wm_checkpoint_path, map_location=device)
+    require_current_contract(wm_checkpoint)
     validate_world_model_metadata(
         wm_checkpoint,
         image_shape=buffer.image_shape,
@@ -130,6 +132,10 @@ def main() -> None:
         module.requires_grad_(False)
 
     rssm = world_model["rssm"]
+    agent_checkpoint = load_checkpoint(args.resume, map_location=device) if args.resume else None
+    if agent_checkpoint is not None:
+        require_current_contract(agent_checkpoint)
+        train_cfg["actor_critic"] = agent_checkpoint["actor_critic_cfg"]
     ac_cfg = train_cfg.get("actor_critic", {})
     actor_critic = ActorCritic(
         ac_cfg,
@@ -146,7 +152,6 @@ def main() -> None:
 
     start_step = 0
     if args.resume:
-        agent_checkpoint = load_checkpoint(args.resume, map_location=device)
         _check_agent_metadata(agent_checkpoint, actor_critic)
         try:
             actor_critic.load_state_dict(agent_checkpoint["actor_critic"])
@@ -175,6 +180,8 @@ def main() -> None:
         critic_optimizer=critic_optimizer,
         global_step=start_step,
         checkpoint_metadata={
+            "transition_contract": 2,
+            "env_cfg": wm_checkpoint.get("env_cfg", configs["env"]),
             "world_model_checkpoint": str(wm_checkpoint_path),
             "image_shape": tuple(buffer.image_shape),
             "state_dim": buffer.state_dim,

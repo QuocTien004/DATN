@@ -20,7 +20,9 @@ predictors:
 
 training:
   lr: 1.0e-4
-  grad_clip: 1000.0
+  grad_clip: 100.0
   free_nats: 0.1           # lowered from 1.0 so KL divergence receives continuous gradients
   kl_balance: 0.8
+  negative_reward_weight: 5.0
+  terminal_weight: 15.0
   imagination_horizon: 15

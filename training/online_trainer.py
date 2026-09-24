@@ -46,6 +46,7 @@ class OnlineTrainer:
         train_env: MetaDriveImageEnv,
         train_env_cfg: dict[str, Any],
         eval_env_cfg: dict[str, Any],
+        demo_buffer: ReplayBuffer | None = None,
     ) -> None:
         self.configs = configs
         self.buffer = buffer
@@ -59,6 +60,12 @@ class OnlineTrainer:
         self.train_env = train_env
         self.train_env_cfg = dict(train_env_cfg)
         self.eval_env_cfg = dict(eval_env_cfg)
+        self.demo_buffer = demo_buffer
+        buffer_cfg = configs.get("train", {}).get("buffer", {})
+        self.demo_ratio = float(buffer_cfg.get("demo_ratio", 0.0))
+        self.term_ratio = float(buffer_cfg.get("term_ratio", 0.25))
+        if not 0 <= self.demo_ratio <= 1:
+            raise ValueError("buffer.demo_ratio must be in [0, 1]")
 
         # Counters
         self.env_steps: int = 0
@@ -114,12 +121,14 @@ class OnlineTrainer:
         successes = 0
         crashes = 0
         route_completions: list[float] = []
+        action_sum = np.zeros(self.buffer.action_dim, dtype=np.float64)
+        action_saturated = np.zeros(self.buffer.action_dim, dtype=np.float64)
+        diagnostic_sums = {key: 0.0 for key in ("reward_base", "reward_shaping", "lateral_available", "lateral_factor")}
 
         for _ in range(num_steps):
             action = policy(self._obs)
-            # Additive exploration noise to prevent action saturation / determinism locking
-            # Decays smoothly from 0.15 down to 0.03 over 50,000 steps
-            noise_scale = max(0.03, 0.15 * (1.0 - float(self.env_steps) / 50000.0))
+            # The actor already samples its policy. Extra noise is opt-in.
+            noise_scale = float(self.configs["train"].get("train", {}).get("action_noise_std", 0.0))
             noisy_action = np.clip(
                 action + np.random.normal(0.0, noise_scale, size=action.shape).astype(np.float32),
                 -1.0,
@@ -134,6 +143,10 @@ class OnlineTrainer:
                 noisy_action
             )
             done = bool(terminated or truncated)
+            action_sum += noisy_action
+            action_saturated += np.abs(noisy_action) > 0.9
+            for key in diagnostic_sums:
+                diagnostic_sums[key] += float(info.get(key, 0.0))
 
             self.buffer.add(
                 Transition(
@@ -144,6 +157,7 @@ class OnlineTrainer:
                     done=done,
                     next_image=next_obs["image"],
                     next_state=next_obs["state"],
+                    terminated=bool(terminated),
                 ),
                 is_first=self._is_first,
             )
@@ -193,11 +207,24 @@ class OnlineTrainer:
                 float(np.mean(route_completions)) if route_completions else 0.0
             ),
             "buffer_size": len(self.buffer),
+            "steering_mean": float(action_sum[0] / max(num_steps, 1)),
+            "throttle_mean": float(action_sum[1] / max(num_steps, 1)),
+            "steering_saturation": float(action_saturated[0] / max(num_steps, 1)),
+            "throttle_saturation": float(action_saturated[1] / max(num_steps, 1)),
+            **{key + "_mean": value / max(num_steps, 1) for key, value in diagnostic_sums.items()},
         }
 
     # ------------------------------------------------------------------
     # 2. Train World Model
     # ------------------------------------------------------------------
+    def _sample_batch(self, batch_size: int, *, include_next: bool = False) -> dict[str, np.ndarray]:
+        n_demo = int(batch_size * self.demo_ratio) if self.demo_buffer is not None else 0
+        parts = []
+        for source, count in ((self.buffer, batch_size - n_demo), (self.demo_buffer, n_demo)):
+            if source is not None and count:
+                parts.append(source.sample(count, include_next=include_next, term_ratio=self.term_ratio))
+        return {key: np.concatenate([part[key] for part in parts], axis=0) for key in parts[0]}
+
     def train_wm(self, num_updates: int, batch_size: int) -> dict[str, float]:
         """Run *num_updates* gradient steps on the World Model."""
         wm_cfg = self.configs["world_model"]
@@ -208,12 +235,12 @@ class OnlineTrainer:
 
         for _ in range(num_updates):
             try:
-                raw = self.buffer.sample(batch_size)
+                raw = self._sample_batch(batch_size, include_next=True)
             except MemoryError:
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                raw = self.buffer.sample(batch_size)
+                raw = self._sample_batch(batch_size, include_next=True)
             batch = replay_batch_to_torch(raw, self.device)
             del raw
             metrics = train_world_model_step(
@@ -245,12 +272,12 @@ class OnlineTrainer:
 
         for _ in range(num_updates):
             try:
-                raw = self.buffer.sample(batch_size)
+                raw = self._sample_batch(batch_size)
             except MemoryError:
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                raw = self.buffer.sample(batch_size)
+                raw = self._sample_batch(batch_size)
             batch = replay_batch_to_torch(raw, self.device)
             del raw
             start_states = posterior_start_states(
@@ -287,15 +314,13 @@ class OnlineTrainer:
         MetaDrive cannot reliably run two instances concurrently, so we
         close the training env, run evaluation, then reopen the training env.
 
-        The eval env is pre-configured with ``start_seed`` and
-        ``num_scenarios`` matching the evaluation range, so we reset
-        *without* passing explicit seeds — MetaDrive cycles through its
-        configured scenario pool automatically.
+        The eval env is configured with the matching seed range, then reset with
+        each explicit seed so every evaluation covers the same scenarios once.
         """
         # Save and close training env
         self.train_env.close()
 
-        eval_env = make_env(self.eval_env_cfg)
+        eval_env = make_env(dict(self.eval_env_cfg, start_seed=start_seed, num_scenarios=num_episodes))
         try:
             policy = self._make_policy(deterministic=True)
 
@@ -307,7 +332,7 @@ class OnlineTrainer:
 
             episode_metrics: list[dict[str, float]] = []
             for _ep in range(num_episodes):
-                obs, info = eval_env.reset()  # no explicit seed
+                obs, info = eval_env.reset(seed=start_seed + _ep)
                 policy.reset()
                 info_history = [info]
                 crashed = False
@@ -363,6 +388,9 @@ class OnlineTrainer:
         # Reopen training env and invalidate running episode
         self.train_env = make_env(self.train_env_cfg)
         self._obs = None
+        self._is_first = True
+        self._episode_return = 0.0
+        self._episode_length = 0
         self._refresh_policy()
 
         return {f"eval/{k}": v for k, v in metrics.items()}
@@ -378,9 +406,15 @@ class OnlineTrainer:
             .get("checkpoint_dir", "checkpoints")
         ) / "online"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
+        replay_path = ckpt_dir / "online_buffer.npz"
+        self.buffer.save(replay_path, checkpoint_step=self.env_steps)
 
         payload: dict[str, Any] = {
             "env_steps": self.env_steps,
+            "transition_contract": 2,
+            "replay_path": replay_path.name,
+            "train_cfg": self.configs.get("train", {}),
+            "actor_critic_cfg": self.actor_critic.cfg,
             "total_episodes": self.total_episodes,
             "models": {
                 name: m.state_dict() for name, m in self.world_model.items()
@@ -402,14 +436,8 @@ class OnlineTrainer:
         save_checkpoint(numbered, payload)
         save_checkpoint(ckpt_dir / "latest.pt", payload)
 
-        # Also save the updated replay buffer
-        buf_dir = Path(
-            self.configs.get("train", {})
-            .get("paths", {})
-            .get("buffer_dir", "data/replay_buffer")
-        )
-        buf_dir.mkdir(parents=True, exist_ok=True)
-        self.buffer.save(buf_dir / "online_buffer.npz")
+        # Numbered model snapshots can be evaluated independently. Resume uses
+        # latest.pt + online_buffer.npz, whose env_steps must match.
 
         print(
             f"[Checkpoint] env_step={self.env_steps} -> {numbered}",

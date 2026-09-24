@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Callable
+import json
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -76,6 +78,7 @@ def evaluate_policy(
     *,
     num_episodes: int = 20,
     start_seed: int = 10000,
+    output_path: str | Path | None = None,
 ) -> dict[str, float]:
     """
     Run policy in MetaDrive for `num_episodes` on hold-out seeds.
@@ -92,6 +95,7 @@ def evaluate_policy(
         info_history = [info]
         crashed = False
         out_of_road = False
+        crash_vehicle = False
         success = False
         done = False
         episode_return = 0.0
@@ -108,6 +112,7 @@ def evaluate_policy(
                 or info.get("out_of_road", False)
             )
             out_of_road = out_of_road or bool(info.get("out_of_road", False))
+            crash_vehicle = crash_vehicle or bool(info.get("crash_vehicle", False) or info.get("crash_object", False))
             success = success or bool(info.get("arrive_dest", False))
             episode_return += float(reward)
             episode_length += 1
@@ -119,9 +124,17 @@ def evaluate_policy(
                 crashed=crashed,
                 success=success,
                 out_of_road=out_of_road,
+                crash_vehicle=crash_vehicle,
                 episode_return=episode_return,
                 episode_length=episode_length,
             )
         )
 
-    return aggregate_episode_metrics(episode_metrics)
+        episode_metrics[-1]["seed"] = start_seed + i
+
+    metrics = aggregate_episode_metrics(episode_metrics)
+    if output_path is not None:
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps({"aggregate": metrics, "episodes": episode_metrics}, indent=2), encoding="utf-8")
+    return metrics

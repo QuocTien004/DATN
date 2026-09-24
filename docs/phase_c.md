@@ -1,5 +1,9 @@
 # Phase C — Actor-Critic imagination
 
+> Cập nhật: workflow online và transition contract v2 xem
+> [TRAINING_GUIDE.md](TRAINING_GUIDE.md) và [RETRAINING_NOTES.md](RETRAINING_NOTES.md).
+> Phần kết quả ngày 2026-09-04 bên dưới là kiểm tra lịch sử, không phải bản train v2.
+
 Tài liệu này là contract ngắn để hai phần World Model và Actor-Critic tích hợp với
 nhau. Implementation là **DreamerV3-style**, không phải bản sao đầy đủ DreamerV3.
 
@@ -14,10 +18,10 @@ checkpoints/world_model/latest.pt
 
 Replay sequence phải có:
 
-- `images`: `(N, 256, 256, 3)`, `uint8`;
+- `images`: `(N, 64, 64, 3)`, `uint8` (bộ lịch sử 256×256 cần config riêng);
 - `states`: `(N, 19)`, `float32`;
 - `actions`: `(N, 2)`, `float32`, miền `[-1, 1]`;
-- `rewards`, `dones`: `(N,)`;
+- `rewards`, `dones`, `terminated`, `episode_start`: `(N,)`;
 - metadata của `ReplayBuffer` hiện tại.
 
 World Model checkpoint cần mapping `models` chứa ít nhất `encoder`, `rssm`,
@@ -52,7 +56,6 @@ target và imagined state trong Critic update đều detach.
 
 ```bash
 python -m unittest discover -s tests -v
-python scripts/test_world_model_arch.py
 ```
 
 ## Train, resume và evaluate

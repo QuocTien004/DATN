@@ -6,8 +6,8 @@
 #
 # Then run: pip install -r requirements.txt
 
-metadrive-simulator>=0.4.3
-numpy>=1.24.0
+metadrive-simulator==0.4.3
+numpy>=1.24.0,<2
 matplotlib>=3.7.0
 jupyter>=1.0.0
 wandb>=0.16.0

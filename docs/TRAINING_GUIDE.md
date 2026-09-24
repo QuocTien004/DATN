@@ -1,120 +1,191 @@
-# HƯỚNG DẪN HUẤN LUYỆN TOÀN DIỆN (PRE-TRAIN & ONLINE RL)
+# Hướng dẫn train lại và lưu artifact
 
-Tài liệu này hướng dẫn toàn bộ quy trình từ đầu (end-to-end) gồm 3 giai đoạn:
-1. **Giai đoạn 1 (Phase A1)**: Thu thập dữ liệu khởi tạo (Bootstrap Collection)
-2. **Giai đoạn 2 (Phase A2)**: Tiền huấn luyện World Model (Offline Pre-training)
-3. **Giai đoạn 3 (Phase B/C)**: Huấn luyện tăng cường trực tuyến (Online RL với DreamerV3)
+Cập nhật 2026-09-24, branch `Bao`. Đọc [RETRAINING_NOTES.md](RETRAINING_NOTES.md)
+để biết vì sao cần pretrain lại. Checkpoint cũ dùng để đối chiếu/eval; không resume
+training trực tiếp sau khi đổi transition contract.
 
----
+## 1. Môi trường Python 3.10 trên Colab
 
-## 1. Yêu Cầu Môi Trường & Thiết Bị
+Mount Drive bằng giao diện Colab hoặc cell do người dùng chạy. Trong notebook,
+chạy cell sau (CLI `uv` có sẵn trên runtime đã kiểm tra):
 
-1. Mở PowerShell tại thư mục gốc của dự án:
-   ```powershell
-   cd d:\DoAnTotNghiep\worldmodel-metadrive
-   ```
-2. Kích hoạt Virtual Environment:
-   ```powershell
-   .\venv\Scripts\Activate.ps1
-   ```
-3. Kiểm tra GPU CUDA:
-   ```powershell
-   python -c "import torch; print('CUDA Available:', torch.cuda.is_available(), '| Device:', torch.cuda.get_device_name(0))"
-   ```
-   *Yêu cầu: In ra `CUDA Available: True` và tên card đồ họa (ví dụ: `NVIDIA GeForce GTX 1650`).*
-
----
-
-## 2. Giai Đoạn 1: Thu Thập Dữ Liệu Khởi Tạo (Bootstrap Data Collection)
-
-Mục đích: Thu thập 25.000 bước lái xe mẫu (chuyên gia kết hợp) để tạo tập dữ liệu ban đầu cho World Model học nhận diện đường sá, xe cộ và vật lý môi trường.
-
-```powershell
-# Chạy thu thập 25.000 bước bằng policy mixed_expert
-python scripts/collect_bootstrap.py --config configs/train.yaml --policy mixed_expert --steps 25000
+```bash
+%%bash
+set -e
+uv venv --python 3.10 /content/datn_py310
+uv pip install --python /content/datn_py310/bin/python torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+git clone --branch Bao https://github.com/QuocTien004/DATN.git /content/DATN
+uv pip install --python /content/datn_py310/bin/python -r /content/DATN/requirements.txt
+/content/datn_py310/bin/python -c "import sys, torch; print(sys.version); print(torch.__version__, torch.cuda.is_available())"
 ```
 
-### Kết quả đầu ra:
-- File mảng numpy: `data/replay_buffer/bootstrap.npz`
-- File bộ nhớ ảnh: `data/replay_buffer/bootstrap_images.mmap`
-- Tập dữ liệu gồm ~73 episode lái xe hoàn chỉnh (độ dài trung bình ~340 bước/episode), có đủ dữ liệu rẽ trái, rẽ phải, tăng tốc và phanh.
+Nếu runtime chưa có `uv`, cài `python -m pip install uv`. Nếu chưa có Xvfb/xauth,
+chạy `apt-get update` rồi `apt-get install -y xvfb xauth`. Kernel notebook có thể
+vẫn là 3.13; các command bên dưới gọi thẳng Python 3.10 trong venv.
 
----
+Trên Windows: tạo venv bằng `py -3.10 -m venv .venv`, activate và cài Torch +
+`requirements.txt` theo README. Không dùng Xvfb trên Windows.
 
-## 3. Giai Đoạn 2: Tiền Huấn Luyện World Model (Offline Pre-training)
+## 2. Đúng bộ dữ liệu và checkpoint
 
-Mục đích: Huấn luyện mạng Encoder (CNN + MLP), RSSM (Recurrent State-Space Model), Decoder, Reward Predictor và Continue Predictor trên dữ liệu bootstrap vừa thu thập.
+Ở Drive của nhóm, bộ mới đã được đặt dưới `DoAn/data/replay_buffer/` và
+`DoAn/checkpoints/`. Hai file `DoAn/bootstrap.npz` và `DoAn/latest.pt` ở cấp ngoài
+là bộ cũ 256×256; đừng trộn với bộ mới 64×64.
 
-```powershell
-# Huấn luyện 5.000 gradient updates trên GPU
-python scripts/train_world_model.py --config configs/train.yaml --device cuda --updates 5000 --batch-size 8 --log-every 20 --ckpt-every 500
+Copy file cần dùng từ Drive sang `/content` trước khi load. Replay giải nén và
+tạo mmap cạnh `.npz`, nên đọc trực tiếp từ Drive vừa chậm vừa tạo I/O lớn.
+Không cần copy tất cả numbered checkpoint để chạy một test.
+
+Để train mới, khuyến nghị collect bootstrap bằng code mới: replay lưu riêng
+`done` (reset episode) và `terminated` (terminal thật). Replay cũ vẫn đọc được,
+nhưng không thể khôi phục chính xác timeout/terminal từ một cờ `done` duy nhất.
+Nếu tái dùng bootstrap 64×64 cũ, ghi rõ hạn chế này trong report, giữ đúng reward
+config lúc collect và vẫn pretrain World Model mới.
+
+## 3. Kiểm tra và collect bootstrap
+
+Trong mỗi cell shell, vào đúng repo và chọn lại Python:
+
+```bash
+%%bash
+set -e
+cd /content/DATN
+PY=/content/datn_py310/bin/python
+$PY -m unittest discover -s tests -v
+xvfb-run -a $PY scripts/collect_bootstrap.py --dry-run
+xvfb-run -a $PY scripts/collect_bootstrap.py --steps 25000 --policy mixed_expert --out data/replay_buffer/bootstrap_v2.npz
 ```
 
-### Nếu bị gián đoạn và muốn Resume:
-```powershell
-python scripts/train_world_model.py --config configs/train.yaml --device cuda --resume checkpoints/world_model/latest.pt
+Expected: RGB `(64,64,3) uint8`, state `(19,)`, action `(2,)`.
+`mixed_expert` chọn expert 80% số bước, random 20%; có noise steering nhỏ.
+Đây là mixed bootstrap, không phải dataset expert thuần. Kiểm tra return/episode
+và preview trước khi pretrain. Mỗi run dùng output mới, giữ lại bootstrap gốc.
+
+## 4. Pretrain World Model mới
+
+```bash
+%%bash
+set -e
+cd /content/DATN
+PY=/content/datn_py310/bin/python
+$PY scripts/train_world_model.py --device cuda --updates 5000 \
+  --buffer data/replay_buffer/bootstrap_v2.npz \
+  --ckpt-dir checkpoints/retrain_v2 --log-dir logs/retrain_v2_wm
 ```
 
-### Kết quả đầu ra:
-- Checkpoints lưu tại: `checkpoints/world_model/wm_step_005000.pt` và `checkpoints/world_model/latest.pt`.
-- Loss tổng thể sẽ hội tụ từ `~1.2` xuống mức `~0.24` (tái tạo ảnh sắc nét, sai số chuyển trạng thái thấp).
-- Vẽ biểu đồ tiền huấn luyện:
-  ```powershell
-  python scripts/plot_metrics.py
-  ```
-  *(Biểu đồ xuất ra tại `docs/pretrain_curves.png`)*
+Không thêm `--resume` với checkpoint cũ. Reward/continue heads hiện học ở
+successor posterior, khớp cách imagination sử dụng chúng; checkpoint mới lưu
+`transition_contract: 2`. Vẫn dùng kiến trúc 512 deterministic + 32×32 categorical,
+batch 8, sequence 32. Nếu thiếu VRAM, giảm batch trước.
 
----
+Để nối chính pretrain v2 đã gián đoạn:
 
-## 4. Giai Đoạn 3: Huấn Luyện Online RL (DreamerV3 Loop)
-
-Mục đích: Xe tự lái tương tác trực tiếp với MetaDrive. Dữ liệu mới liên tục được nạp vào buffer để cập nhật World Model, đồng thời Actor-Critic được huấn luyện trong không gian tưởng tượng (latent imagination 30 bước).
-
-```powershell
-# Huấn luyện Online RL chính thức (500k steps)
-python scripts/train_online.py --device cuda --total-steps 500000 --steps-per-iter 1000 --ckpt-dir checkpoints/exp_official_01
+```bash
+$PY scripts/train_world_model.py --device cuda --updates 1000 \
+  --buffer data/replay_buffer/bootstrap_v2.npz \
+  --resume checkpoints/retrain_v2/world_model/latest.pt \
+  --ckpt-dir checkpoints/retrain_v2 --log-dir logs/retrain_v2_wm
 ```
 
-### Ý nghĩa các tham số:
-- `--device cuda`: Huấn luyện mạng nơ-ron trên GPU.
-- `--total-steps 500000`: Tổng số bước tương tác với MetaDrive (500k steps).
-- `--steps-per-iter 1000`: Mỗi vòng lặp thu thập 1.000 bước thực tế rồi cập nhật 25 bước WM và 25 bước Actor-Critic.
-- `--ckpt-dir checkpoints/exp_official_01`: Lưu checkpoint định kỳ vào `checkpoints/exp_official_01/online/`.
+`--updates` của WM là số update thêm. Training loss thấp chưa đủ chứng minh WM
+dự đoán đúng terminal/reward ở trajectory chưa thấy; cần xem rollout và eval.
 
-### Khôi phục (Resume) nếu mất điện / tắt máy:
-```powershell
-python scripts/train_online.py --device cuda --resume checkpoints/exp_official_01/online/latest.pt --ckpt-dir checkpoints/exp_official_01
+## 5. Pilot online 50k steps
+
+```bash
+%%bash
+set -e
+cd /content/DATN
+PY=/content/datn_py310/bin/python
+xvfb-run -a $PY scripts/train_online.py --device cuda --seed 0 \
+  --total-steps 50000 --steps-per-iter 1000 \
+  --buffer data/replay_buffer/bootstrap_v2.npz \
+  --demo-buffer data/replay_buffer/bootstrap_v2.npz \
+  --wm-checkpoint checkpoints/retrain_v2/world_model/latest.pt \
+  --ckpt-dir checkpoints/retrain_v2 --log-dir logs/retrain_v2_online
 ```
 
----
+Mỗi 1000 env steps có 25 WM và 25 Actor-Critic updates. Batch 8 lấy 2 sequences
+từ bootstrap được giữ riêng, 6 từ replay online. `term_ratio: 0.25` là tỷ lệ
+sequence bắt buộc chứa một episode boundary; phần uniform còn lại vẫn có thể
+chứa terminal, không có nghĩa chính xác 25% transition là crash.
 
-## 5. Theo Dõi Tiến Trình & Vẽ Biểu Đồ
+Actor mới: std trong `[0.1,0.5]`, init 0.3, entropy coefficient 0.003, không cộng
+noise ngoài policy. Các số này là cấu hình pilot cần đánh giá, chưa phải nghiệm
+tối ưu đã xác minh. Reward coefficients được giữ nguyên để tránh đổi cả mục tiêu
+học cùng lúc với các lỗi pipeline.
 
-Mở một cửa sổ PowerShell thứ 2 (đã kích hoạt `venv`) để theo dõi:
+Theo dõi success/out-of-road và route completion qua nhiều mốc. Thêm các metrics:
+`rollout/throttle_saturation`, `rollout/steering_saturation`,
+`rollout/lateral_available_mean`, `rollout/reward_base_mean`,
+`rollout/reward_shaping_mean`, `wm/terminal_fraction`, `wm/continue_on_terminal`.
+`ac/continue_mean` giữ nghĩa lịch sử là discounted continuation; metric mới
+`ac/continue_probability_mean` bỏ gamma. Không dùng ngưỡng 0.95 cho trung bình
+continue để tự kết luận model nhận biết crash: cần xem riêng terminal samples.
 
-```powershell
-python scripts/plot_metrics.py
+Nên thử ít nhất seed 0, 1, 2 với output/log riêng. Chỉ nối lên 100k/500k khi route
+completion cải thiện lặp lại, bắt đầu có success và out-of-road giảm. Không tăng
+độ khó sang Stage 2 khi Stage 1 vẫn success 0%.
+
+## 6. Lưu và resume đúng cặp
+
+```text
+checkpoints/retrain_v2/
+  world_model/latest.pt
+  online/
+    latest.pt
+    online_buffer.npz
+    online_step_020000.pt
+    ...
+logs/retrain_v2_online/
+  metrics.jsonl
+  resolved_config.json
 ```
-- Tự động xuất biểu đồ trực quan ra file **`docs/training_curves.png`**.
-- Xem nhanh dòng log mới nhất:
-  ```powershell
-  Get-Content logs/metrics.jsonl -Tail 1
-  ```
 
-### Các chỉ số cần quan sát:
-| Chỉ số | Kỳ vọng khi xe học tốt | Ý nghĩa |
-| :--- | :--- | :--- |
-| `eval/mean_route_completion` | Tăng từ $5\% \to 30\% \to 50\%+$ | Xe vượt qua khúc cua đầu tiên và đi xa hơn. |
-| `eval/out_of_road_rate` | Giảm từ $1.0 \to 0.0$ | Tỷ lệ văng lề giảm dần. |
-| `ac/policy_std` | Giữ ổn định $0.30 \sim 0.45$ | Duy trì khám phá, không bị liệt góc lái. |
-| `ac/continue_mean` | $< 0.95$ | World Model nhận biết được nguy hiểm khi xe chệch làn. |
+`latest.pt` chứa tất cả WM, Actor/Critic, optimizer, config và counters. Replay
+cạnh nó ghi `checkpoint_step`; resume kiểm tra bằng `env_steps`. Không fallback
+về bootstrap khi thiếu replay. Numbered model checkpoint dùng để eval lịch sử;
+chỉ resume được nếu còn replay đúng mốc đó. Repo chỉ giữ một replay online mới nhất
+để tránh nhân bản hàng trăm MB mỗi lần save.
 
----
-
-## 6. Đánh Giá Độc Lập Sau Khi Huấn Luyện (Evaluation)
-
-Chạy kiểm thử trên 20 map độc lập chưa từng gặp khi train (seeds 10000–10019):
-
-```powershell
-python evaluation/evaluate.py --checkpoint checkpoints/exp_official_01/online/latest.pt --wm-checkpoint checkpoints/world_model/latest.pt --num-episodes 20 --device cuda
+```bash
+xvfb-run -a $PY scripts/train_online.py --device cuda --total-steps 100000 \
+  --resume checkpoints/retrain_v2/online/latest.pt \
+  --demo-buffer data/replay_buffer/bootstrap_v2.npz \
+  --ckpt-dir checkpoints/retrain_v2 --log-dir logs/retrain_v2_online
 ```
+
+Không cần `--wm-checkpoint` khi resume online. Không truyền bootstrap qua `--buffer`
+trong lệnh resume. `--total-steps` là mốc tổng. `--eval-every 0` và `--ckpt-every 0`
+tắt tác vụ định kỳ tương ứng; cuối training vẫn save.
+
+Để lưu lên Drive: sau khi tiến trình dừng ở checkpoint hoàn chỉnh, copy cả thư mục
+`checkpoints/retrain_v2/`, `logs/retrain_v2_online/`, bootstrap và config vào thư
+mục run mới trên Drive. Không copy `latest.pt` ở một thời điểm rồi replay sau khi
+training đã ghi mốc mới. Mỗi file được ghi tạm rồi rename; cặp model/replay có kiểm
+tra step để phát hiện gián đoạn giữa hai lần ghi. Không có snapshot trạng thái
+simulator/RNG, nên resume bắt đầu episode mới, không tái hiện bit-for-bit quỹ đạo.
+
+## 7. Eval độc lập và smoke test
+
+```bash
+xvfb-run -a $PY scripts/eval.py --device cuda --episodes 20 --start-seed 10000 \
+  --checkpoint checkpoints/retrain_v2/online/latest.pt \
+  --output logs/retrain_v2_online/eval.json
+```
+
+Eval dùng WM và Actor cùng checkpoint, env config trong checkpoint, seed cố định
+10000–10019. Không truyền `--wm-checkpoint` cho checkpoint online. JSON lưu từng
+episode để so sánh đúng seed. Nếu eval checkpoint offline Actor-only của workflow
+cũ, mới cần truyền thêm đúng `--wm-checkpoint` tương ứng.
+
+Test nhanh trước khi train dài: copy config riêng và đặt env horizon 10,
+buffer capacity 1000, sequence 8, imagination horizon 3, max_start_states 4.
+Dùng replay nhỏ và output riêng. Chạy 8 env steps, 1 WM + 1 AC update/iteration,
+save rồi resume đến 12; thêm `--episodes 1 --horizon 10` cho eval smoke. Không dùng
+chỉ số từ horizon rút ngắn để báo chất lượng policy.
+
+MetaDrive RGB có thể render bằng CPU trên Colab dù neural network dùng T4. Nếu
+eval chậm, giới hạn số episode để kiểm tra pipeline; báo đúng số đã hoàn tất.
+Sau khi tải report/artifact cần giữ về Drive hoặc máy local, ngắt runtime để
+không tiếp tục tiêu quota.

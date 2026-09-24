@@ -20,7 +20,7 @@ import torch
 from envs.metadrive_wrapper import make_env
 from evaluation.evaluate import LatentActorPolicy, evaluate_policy
 from models.actor_critic import ActorCritic
-from models.world_model import build_world_model, load_world_model_state
+from models.world_model import build_world_model, load_world_model_state, validate_world_model_metadata
 from training.collect import random_action
 from utils.checkpoint import load_checkpoint
 from utils.config import load_experiment_configs
@@ -36,6 +36,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint", type=str, default=None, help="Actor-Critic checkpoint")
     p.add_argument("--wm-checkpoint", type=str, default=None)
     p.add_argument("--device", type=str, default=None, help="cpu | cuda")
+    p.add_argument("--start-seed", type=int, default=None)
+    p.add_argument("--output", type=str, default=None, help="Save aggregate and per-seed JSON")
+    p.add_argument("--horizon", type=int, default=None, help="Short smoke tests only; omit for full eval")
     return p.parse_args()
 
 
@@ -55,11 +58,16 @@ def main() -> None:
     eval_cfg = train_cfg.get("eval", {})
 
     set_seed(int(train_cfg.get("seed", 0)))
-    env = make_env(env_cfg)
+    num_episodes = int(args.episodes if args.episodes is not None else eval_cfg.get("num_episodes", 20))
+    start_seed = int(args.start_seed if args.start_seed is not None else eval_cfg.get("start_seed", 10000))
+    if num_episodes <= 0:
+        raise ValueError("--episodes must be positive")
 
     if args.checkpoint:
         device = _resolve_device(args.device or train_cfg.get("device", "cpu"))
-        agent_checkpoint = load_checkpoint(args.checkpoint, map_location=device)
+        agent_checkpoint = load_checkpoint(args.checkpoint, map_location="cpu")
+        if args.env_config is None and "env_cfg" in agent_checkpoint:
+            env_cfg = dict(agent_checkpoint["env_cfg"])
         checkpoint_root = Path(
             train_cfg.get("paths", {}).get("checkpoint_dir", "checkpoints")
         )
@@ -68,12 +76,17 @@ def main() -> None:
             or agent_checkpoint.get("world_model_checkpoint")
             or checkpoint_root / "world_model" / "latest.pt"
         )
-        if not wm_path.exists():
+        if "models" in agent_checkpoint:
+            if args.wm_checkpoint:
+                raise ValueError("Online checkpoint already contains its WM; omit --wm-checkpoint")
+            wm_checkpoint = agent_checkpoint
+        elif not wm_path.exists():
             raise FileNotFoundError(
                 f"World Model checkpoint not found: {wm_path}. "
                 "Pass --wm-checkpoint PATH."
             )
-        wm_checkpoint = load_checkpoint(wm_path, map_location=device)
+        else:
+            wm_checkpoint = load_checkpoint(wm_path, map_location="cpu")
         image_shape = tuple(
             wm_checkpoint.get(
                 "image_shape",
@@ -93,9 +106,10 @@ def main() -> None:
         action_dim = int(
             wm_checkpoint.get(
                 "action_dim",
-                agent_checkpoint.get("action_dim", env.action_space.shape[0]),
+                agent_checkpoint.get("action_dim", 2),
             )
         )
+        validate_world_model_metadata(wm_checkpoint, image_shape=(int(env_cfg.get("image_height", 64)), int(env_cfg.get("image_width", 64)), 3))
         wm_cfg = wm_checkpoint.get("wm_cfg", configs["world_model"])
         world_model = build_world_model(
             wm_cfg,
@@ -110,6 +124,10 @@ def main() -> None:
         ac_cfg = agent_checkpoint.get(
             "actor_critic_cfg", train_cfg.get("actor_critic", {})
         )
+        if "actor_critic_cfg" not in agent_checkpoint:
+            # Historical online checkpoints predate smooth parameterization.
+            ac_cfg = dict(ac_cfg, mean_transform="clamp", std_transform="log_clamp", min_std=0.30, max_std=1.0)
+            print("[warn] Legacy online checkpoint has no Actor config; using original clamp transforms and std bounds 0.30..1.0")
         actor_critic = ActorCritic(
             ac_cfg,
             rssm.deter_dim,
@@ -133,12 +151,17 @@ def main() -> None:
         def policy_fn(_obs: dict) -> np.ndarray:
             return random_action(env.action_space)
 
+    env_cfg = dict(env_cfg, start_seed=start_seed, num_scenarios=num_episodes)
+    if args.horizon is not None:
+        env_cfg["horizon"] = args.horizon
+    env = make_env(env_cfg)
     try:
         metrics = evaluate_policy(
             env,
             policy_fn,
-            num_episodes=int(args.episodes or eval_cfg.get("num_episodes", 5)),
-            start_seed=int(eval_cfg.get("start_seed", 10000)),
+            num_episodes=num_episodes,
+            start_seed=start_seed,
+            output_path=args.output,
         )
         print("=== Eval metrics ===")
         for k, v in metrics.items():

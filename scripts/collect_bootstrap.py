@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--env-config", type=str, default=None)
     p.add_argument("--wm-config", type=str, default=None)
     p.add_argument("--steps", type=int, default=None, help="Override bootstrap.num_steps")
-    p.add_argument("--policy", type=str, default="mixed_expert", choices=["mixed_expert", "random"], help="Policy to collect bootstrap data")
+    p.add_argument("--policy", type=str, default=None, choices=["mixed_expert", "random"], help="Override bootstrap.policy")
     p.add_argument("--dry-run", action="store_true", help="Reset once and print obs shapes")
     p.add_argument("--out", type=str, default=None, help="Output .npz path for buffer")
     return p.parse_args()
@@ -94,7 +94,7 @@ def main() -> None:
             sequence_length=int(buf_cfg.get("sequence_length", 64)),
         )
 
-        if args.policy == "mixed_expert":
+        if (args.policy or boot_cfg.get("policy", "mixed_expert")) == "mixed_expert":
             from metadrive.examples import expert
             import numpy as np
 

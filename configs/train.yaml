@@ -23,12 +23,13 @@ wandb:
 buffer:
   capacity: 100000        # increased: 25k too small, old episodes lost after ~25 iterations
   sequence_length: 32     # WM sample length (ref: 64; 32 = faster on 1650)
-  term_ratio: 0.25        # 25% terminal sequence ratio to balance crash steps
+  term_ratio: 0.25        # 25% forced terminal-containing sequences, rest uniformly sampled
+  demo_ratio: 0.25        # keep a separate protected bootstrap replay during online training
 
 # Bootstrap data collection (Phase A)
 bootstrap:
   num_steps: 20000
-  policy: random          # random | (later: ppo)
+  policy: mixed_expert    # 80% expert + 20% random (collector also adds small steering noise)
   save_every: 5000
 
 # World Model offline training on bootstrap buffer (A5-A6)
@@ -44,13 +45,15 @@ actor_critic:
   critic_hidden: [512, 512]
   action_low: -1.0          # MetaDrive steering/throttle lower bound
   action_high: 1.0         # MetaDrive steering/throttle upper bound
-  init_std: 0.5            # initial unsquashed Normal exploration std
-  min_std: 0.30            # raised min_std to prevent policy entropy collapse
-  max_std: 1.0
+  init_std: 0.3            # initial unsquashed Normal exploration std
+  min_std: 0.1
+  max_std: 0.5
+  mean_transform: tanh    # smooth bound; prevents hard-clamp zero-gradient lock
+  std_transform: sigmoid # smooth bounded std; fresh Actor only
   imagination_horizon: 30  # extended horizon (~3.0s) so Actor sees crashes at step 35-50
   gamma: 0.997             # restored long-horizon discount (~333 steps) paired with DreamerV3 return normalization
   lambda: 0.95
-  entropy_scale: 0.035     # tuned entropy scale to maintain exploration & avoid throttle saturation
+  entropy_scale: 0.003     # retraining candidate; validate with short multi-seed runs
   actor_lr: 3.0e-5         # stabilized learning rate for Actor
   critic_lr: 3.0e-5        # stabilized learning rate for Critic
   grad_clip: 10.0          # tight gradient clipping to prevent explosion
@@ -60,9 +63,11 @@ actor_critic:
   log_every: 20
   checkpoint_every: 500
 
-# Online training loop (Phase B/C — stubs for now)
+# Online training loop: run a 50k pilot before extending to 500k.
 train:
-  total_env_steps: 500000
+  total_env_steps: 50000
+  steps_per_iter: 1000
+  action_noise_std: 0.0   # actor already samples; no second exploration source
   train_every: 1
   world_model_updates: 25
   actor_critic_updates: 25

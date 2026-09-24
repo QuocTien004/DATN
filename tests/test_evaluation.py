@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import unittest
+import json
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -49,6 +52,19 @@ class ResettablePolicy:
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_collision_breakdown_and_per_seed_output(self) -> None:
+        class CrashEnv(ShortEpisodeEnv):
+            def step(self, action):
+                obs, reward, done, trunc, info = super().step(action)
+                info.update(arrive_dest=False, crash_vehicle=done)
+                return obs, reward, done, trunc, info
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "eval.json"
+            metrics = evaluate_policy(CrashEnv(), ResettablePolicy(), num_episodes=2, start_seed=50, output_path=output)
+            self.assertEqual(metrics["crash_vehicle_rate"], 1.0)
+            self.assertEqual(metrics["out_of_road_rate"], 0.0)
+            self.assertEqual([r["seed"] for r in json.loads(output.read_text())["episodes"]], [50, 51])
+
     def test_evaluate_policy_resets_state_and_aggregates_returns(self) -> None:
         policy = ResettablePolicy()
         metrics = evaluate_policy(

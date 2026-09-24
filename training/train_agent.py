@@ -362,6 +362,7 @@ def train_actor_critic_step(
         "critic_loss": float(critic_loss.detach()),
         "imagined_reward_mean": float((trajectory.reward.detach() * weights).sum() / weight_sum),
         "continue_mean": float((trajectory.discount.detach() * weights).sum() / weight_sum),
+        "continue_probability_mean": float((trajectory.discount.detach() * weights).sum() / weight_sum / gamma) if gamma > 0 else 0.0,
         "value_mean": float((trajectory.value[:-1].detach() * weights).sum() / weight_sum),
         "lambda_return_mean": float((returns.detach() * weights).sum() / weight_sum),
         "entropy": float(entropy.detach()),

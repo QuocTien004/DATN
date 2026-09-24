@@ -77,6 +77,10 @@ class Actor(nn.Module):
 
         self.min_std = float(cfg.get("min_std", 0.1))
         self.max_std = float(cfg.get("max_std", 1.0))
+        self.mean_transform = str(cfg.get("mean_transform", "clamp"))
+        self.std_transform = str(cfg.get("std_transform", "log_clamp"))
+        if self.mean_transform not in {"clamp", "tanh"} or self.std_transform not in {"log_clamp", "sigmoid"}:
+            raise ValueError("Unsupported actor distribution transform")
         if not 0.0 < self.min_std <= self.max_std:
             raise ValueError("Expected 0 < min_std <= max_std")
 
@@ -96,7 +100,13 @@ class Actor(nn.Module):
         nn.init.zeros_(head.bias)
         init_std = min(max(float(cfg.get("init_std", 0.5)), self.min_std), self.max_std)
         with torch.no_grad():
-            head.bias[self.action_dim :].fill_(log(init_std))
+            if self.std_transform == "sigmoid":
+                if self.max_std <= self.min_std:
+                    raise ValueError("sigmoid std requires min_std < max_std")
+                fraction = min(max((init_std - self.min_std) / (self.max_std - self.min_std), 1e-4), 1.0 - 1e-4)
+                head.bias[self.action_dim :].fill_(log(fraction / (1.0 - fraction)))
+            else:
+                head.bias[self.action_dim :].fill_(log(init_std))
 
     def forward(
         self,
@@ -112,10 +122,12 @@ class Actor(nn.Module):
             stoch_size=self.stoch_size,
         )
         mean, log_std = self.net(feature).chunk(2, dim=-1)
-        # Clamp pre-tanh mean to [-2.0, 2.0] to avoid tanh gradient saturation
-        mean = torch.clamp(mean, -2.0, 2.0)
-        log_std = log_std.clamp(log(self.min_std), log(self.max_std))
-        std = log_std.exp()
+        # Legacy checkpoints use hard clamp; fresh policies use a smooth bound.
+        mean = 2.0 * torch.tanh(mean / 2.0) if self.mean_transform == "tanh" else torch.clamp(mean, -2.0, 2.0)
+        if self.std_transform == "sigmoid":
+            std = self.min_std + (self.max_std - self.min_std) * torch.sigmoid(log_std)
+        else:
+            std = log_std.clamp(log(self.min_std), log(self.max_std)).exp()
         distribution = Normal(mean, std)
         pre_tanh = mean if deterministic else distribution.rsample()
         normalized_action = torch.tanh(pre_tanh)

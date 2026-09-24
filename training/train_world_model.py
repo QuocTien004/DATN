@@ -52,8 +52,10 @@ def train_world_model_step(
     state = batch["state"]
     action = batch["action"]
     reward = batch["reward"]
-    done = batch["done"].float()
+    terminal = batch.get("terminated", batch["done"]).float()
     is_first = batch["is_first"].float() if "is_first" in batch else None
+    if "next_image" not in batch or "next_state" not in batch:
+        raise ValueError("WM training requires replay.sample(..., include_next=True) for transition-aligned targets")
 
     B, T = image.shape[:2]
     device = image.device
@@ -89,33 +91,39 @@ def train_world_model_step(
     recon_image = recon["image"].reshape(B, T, *image.shape[2:])
     recon_state = recon["state"].reshape(B, T, state.shape[-1])
 
-    pred_reward = reward_pred(h_flat, z_flat).reshape(B, T)
-    target_cont = 1.0 - done
-    pred_cont_logit = continue_pred(h_flat, z_flat).reshape(B, T)
+    # Stored reward/done belong to action_t -> obs_(t+1), while reconstruction
+    # above belongs to obs_t. Imagination also queries the heads on next latent.
+    next_e = enc(_flatten_time(batch["next_image"]), _flatten_time(batch["next_state"]))
+    next_post, next_stats = rssm.observe_step(
+        {"h": h_flat, "z": z_flat}, _flatten_time(action), next_e
+    )
+    pred_reward = reward_pred(next_post["h"], next_post["z"]).reshape(B, T)
+    target_cont = 1.0 - terminal
+    pred_cont_logit = continue_pred(next_post["h"], next_post["z"]).reshape(B, T)
 
     loss_recon_img = F.mse_loss(recon_image, image)
     loss_recon_state = F.mse_loss(recon_state, state)
     sym_reward = torch.sign(reward) * torch.log1p(torch.abs(reward))
     # Weight negative rewards (crashes) by 5.0x to prevent smoothing away penalties
-    rew_weight = torch.where(sym_reward < 0.0, 5.0, 1.0)
+    rew_weight = torch.where(sym_reward < 0.0, float(train_cfg.get("negative_reward_weight", 5.0)), 1.0)
     loss_reward = ((pred_reward - sym_reward).square() * rew_weight).mean()
     
     # Weight terminal transitions (target_cont=0.0) by 15.0x to counteract 31:1 imbalance
-    cont_weight = torch.where(target_cont == 0.0, 15.0, 1.0)
+    cont_weight = torch.where(target_cont == 0.0, float(train_cfg.get("terminal_weight", 15.0)), 1.0)
     bce_continue = F.binary_cross_entropy_with_logits(
         pred_cont_logit, target_cont, reduction="none"
     )
     loss_continue = (bce_continue * cont_weight).mean()
 
-    kl_post_prior_raw = _kl_cat(
-        _flatten_time(post_logits), _flatten_time(prior_logits).detach()
-    )
-    kl_prior_post_raw = _kl_cat(
-        _flatten_time(post_logits).detach(), _flatten_time(prior_logits)
-    )
+    # Train both current and successor priors, including terminal successors.
+    all_post = torch.cat([_flatten_time(post_logits), next_stats["posterior_logits"]])
+    all_prior = torch.cat([_flatten_time(prior_logits), next_stats["prior_logits"]])
+    kl_post_prior_raw = _kl_cat(all_post, all_prior.detach())
+    kl_prior_post_raw = _kl_cat(all_post.detach(), all_prior)
     kl_post_prior = torch.clamp(kl_post_prior_raw, min=free_nats).mean()
     kl_prior_post = torch.clamp(kl_prior_post_raw, min=free_nats).mean()
-    loss_kl = kl_balance * kl_post_prior + (1.0 - kl_balance) * kl_prior_post
+    # kl_balance weights dynamics (prior learning), not the representation term.
+    loss_kl = kl_balance * kl_prior_post + (1.0 - kl_balance) * kl_post_prior
 
     loss = (
         loss_recon_img
@@ -130,6 +138,7 @@ def train_world_model_step(
     torch.nn.utils.clip_grad_norm_(
         [p for m in models.values() for p in m.parameters()],
         grad_clip,
+        error_if_nonfinite=True,
     )
     optimizer.step()
 
@@ -141,4 +150,6 @@ def train_world_model_step(
         "loss_continue": float(loss_continue.detach()),
         "loss_kl": float(loss_kl.detach()),
         "loss_kl_raw": float(kl_post_prior_raw.mean().detach()),
+        "terminal_fraction": float(terminal.mean()),
+        "continue_on_terminal": float(torch.sigmoid(pred_cont_logit.detach())[terminal.bool()].mean()) if terminal.any() else 0.0,
     }

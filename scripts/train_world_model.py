@@ -32,6 +32,7 @@ from utils.config import load_experiment_configs
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBuffer
 from utils.seed import set_seed
+from utils.online_state import require_current_contract
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,6 +52,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", type=str, default=None, help="cuda | cpu")
     p.add_argument("--log-every", type=int, default=20)
     p.add_argument("--ckpt-every", type=int, default=200)
+    p.add_argument("--ckpt-dir", type=str, default=None, help="Output root (world_model/ appended)")
+    p.add_argument("--log-dir", type=str, default=None)
     p.add_argument(
         "--resume",
         type=str,
@@ -79,6 +82,13 @@ def main() -> None:
     train_cfg = configs["train"]
     wm_cfg = configs["world_model"]
     env_cfg = configs["env"]
+    paths = train_cfg.setdefault("paths", {})
+    if args.ckpt_dir:
+        paths["checkpoint_dir"] = args.ckpt_dir
+    if args.log_dir:
+        paths["log_dir"] = args.log_dir
+    if not args.resume and (Path(paths.get("checkpoint_dir", "checkpoints")) / "world_model/latest.pt").exists():
+        raise FileExistsError("WM output already exists. Use --resume with a v2 checkpoint or a new --ckpt-dir.")
 
     set_seed(int(train_cfg.get("seed", 0)))
     device = _resolve_device(args.device or train_cfg.get("device", "cpu"))
@@ -119,6 +129,7 @@ def main() -> None:
     start_step = 0
     if args.resume:
         ckpt = load_checkpoint(args.resume, map_location=device)
+        require_current_contract(ckpt)
         for k, m in models.items():
             m.load_state_dict(ckpt["models"][k])
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -156,12 +167,12 @@ def main() -> None:
 
     for step in range(start_step + 1, start_step + updates + 1):
         try:
-            raw = buffer.sample(batch_size, include_next=False)
+            raw = buffer.sample(batch_size, include_next=True, term_ratio=float(train_cfg.get("buffer", {}).get("term_ratio", 0.25)))
         except MemoryError:
             gc.collect()
             if device.type == "cuda":
                 torch.cuda.empty_cache()
-            raw = buffer.sample(batch_size, include_next=False)
+            raw = buffer.sample(batch_size, include_next=True, term_ratio=float(train_cfg.get("buffer", {}).get("term_ratio", 0.25)))
         batch = replay_batch_to_torch(raw, device)
         del raw
         metrics = train_world_model_step(batch, models, optimizer, wm_cfg)
@@ -170,12 +181,13 @@ def main() -> None:
         if step % log_every == 0 or step == start_step + 1:
             logger.log(metrics, step=step)
 
-        if step % ckpt_every == 0 or step == start_step + updates:
+        if (ckpt_every > 0 and step % ckpt_every == 0) or step == start_step + updates:
             path = ckpt_dir / f"wm_step_{step:06d}.pt"
             save_checkpoint(
                 path,
                 {
                     "step": step,
+                    "transition_contract": 2,
                     "models": {k: m.state_dict() for k, m in models.items()},
                     "optimizer": optimizer.state_dict(),
                     "wm_cfg": wm_cfg,
@@ -191,6 +203,7 @@ def main() -> None:
                 latest,
                 {
                     "step": step,
+                    "transition_contract": 2,
                     "models": {k: m.state_dict() for k, m in models.items()},
                     "optimizer": optimizer.state_dict(),
                     "wm_cfg": wm_cfg,
