@@ -1,5 +1,9 @@
 # Thay đổi phục vụ train lại — 2026-09-24
 
+Đây là lịch sử bản v2. Kết quả train v2 50k và thay đổi tiếp theo ngày 25/09 ở
+[PILOT_REVIEW_20260925.md](PILOT_REVIEW_20260925.md). Thư mục Drive cũ bên dưới
+đã được nhóm chuyển vào `DoAn/Br_Bao/smoke/`; link vẫn giữ nguyên.
+
 ## Vì sao cần sửa trước khi tăng số bước
 
 Log lượt cũ dừng ở 403k; checkpoint mới được chia sẻ là 400k. Trong log, cả 40 lần

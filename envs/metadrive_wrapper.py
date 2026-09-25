@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import os
 import warnings
 
 import numpy as np
@@ -50,6 +51,14 @@ class MetaDriveImageEnv:
         self._build_env()
 
     def _build_env(self) -> None:
+        backend = os.environ.get("DATN_RENDER_BACKEND", "default")
+        if backend not in {"default", "egl"}:
+            raise ValueError("DATN_RENDER_BACKEND must be default or egl")
+        if backend == "egl":
+            if self.env_cfg.get("use_render", False):
+                raise ValueError("EGL backend requires use_render=false")
+            from panda3d.core import loadPrcFileData
+            loadPrcFileData("", "load-display p3headlessgl\naux-display p3headlessgl\nsync-video false")
         try:
             from metadrive.component.sensors.rgb_camera import RGBCamera
             from metadrive.envs.metadrive_env import MetaDriveEnv

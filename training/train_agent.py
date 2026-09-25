@@ -120,7 +120,9 @@ def posterior_start_states(
 def symexp(x: torch.Tensor, max_val: float) -> torch.Tensor:
     """Invert symlog with a strict clamping ceiling to prevent numerical explosion."""
     clamped = torch.clamp(x, -max_val, max_val)
-    return torch.sign(clamped) * (torch.exp(torch.abs(clamped)) - 1.0)
+    # sign(x) * expm1(abs(x)) has autograd derivative 0 at x=0, although
+    # symexp'(0)=1. Use two smooth branches so zero-initialized values can learn.
+    return torch.where(clamped >= 0, torch.expm1(clamped), -torch.expm1(-clamped))
 
 
 def imagine_rollout(

@@ -3,6 +3,8 @@ from __future__ import annotations
 import gc
 import tempfile
 import unittest
+from types import SimpleNamespace
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,8 +17,10 @@ from models.world_model import build_world_model
 from training.batches import replay_batch_to_torch
 from training.online_trainer import OnlineTrainer
 from training.train_world_model import train_world_model_step
+from training.train_agent import symexp
 from utils.online_state import resolve_replay_path, validate_replay_step, require_current_contract
 from utils.replay_buffer import ReplayBuffer, Transition
+from scripts.setup_colab_egl import select_gl_package
 
 
 def transition(value: int, *, done: bool = False, terminated: bool = False) -> Transition:
@@ -90,6 +94,79 @@ class ReplayRegressionTests(unittest.TestCase):
 
 
 class TrainingRegressionTests(unittest.TestCase):
+    def test_online_eval_saves_seed_and_time_limit_and_resets_episode(self):
+        class Env:
+            def reset(self, seed=None):
+                self.steps = 0
+                return {}, {}
+            def step(self, action):
+                self.steps += 1
+                return {}, 1., False, self.steps == 2, {"route_completion": .1}
+            def close(self):
+                pass
+        class Policy:
+            def reset(self):
+                pass
+            def __call__(self, obs):
+                return np.zeros(2)
+        with tempfile.TemporaryDirectory() as directory:
+            trainer = object.__new__(OnlineTrainer)
+            trainer.train_env = Env()
+            trainer.train_env_cfg = {}
+            trainer.eval_env_cfg = {"horizon": 2}
+            trainer.logger = SimpleNamespace(log_dir=Path(directory))
+            trainer.env_steps = 250
+            trainer._episode_return = 999.
+            trainer._episode_length = 999
+            trainer._make_policy = lambda **kwargs: Policy()
+            trainer._refresh_policy = lambda: None
+            with patch('training.online_trainer.make_env', side_effect=lambda cfg: Env()):
+                metrics = trainer.evaluate(2, start_seed=10000)
+            saved = json.loads((Path(directory)/'eval_step_000250.json').read_text())
+            self.assertEqual(saved['horizon'], 2)
+            self.assertEqual([e['seed'] for e in saved['episodes']], [10000, 10001])
+            self.assertTrue(all(e['truncated'] for e in saved['episodes']))
+            self.assertEqual(metrics['eval/mean_episode_length'], 2)
+            self.assertEqual(trainer._episode_return, 0.)
+            self.assertEqual(trainer._episode_length, 0)
+
+    def test_egl_setup_requires_exact_driver_version(self):
+        listing = "libnvidia-gl-580 | 580.99.01-1ubuntu1 | repo\nlibnvidia-gl-580 | 580.82.07-0ubuntu1 | repo"
+        self.assertEqual(select_gl_package("580.82.07", listing), "580.82.07-0ubuntu1")
+        with self.assertRaisesRegex(RuntimeError, "No exact"):
+            select_gl_package("580.82.06", listing)
+
+    def test_symexp_has_unit_gradient_at_zero(self):
+        values = torch.tensor([-.1, 0., .1], requires_grad=True)
+        symexp(values, 3.26).sum().backward()
+        torch.testing.assert_close(values.grad, values.detach().abs().exp())
+
+    def test_squashed_entropy_pushes_saturated_mean_inward(self):
+        ac = ActorCritic({"actor_hidden": [4], "critic_hidden": [4],
+                          "mean_transform": "tanh", "entropy_mode": "squashed"}, 4, 4, 2)
+        with torch.no_grad():
+            ac.actor.net[-1].weight.zero_()
+            ac.actor.net[-1].bias[:2].copy_(torch.tensor([3., -3.]))
+        out = ac.act({"h": torch.zeros(1, 4), "z": torch.zeros(1, 2, 2)}, deterministic=True)
+        out.entropy.sum().backward()
+        grad = ac.actor.net[-1].bias.grad[:2]
+        self.assertLess(grad[0].item(), 0.)
+        self.assertGreater(grad[1].item(), 0.)
+        self.assertTrue(torch.isfinite(out.log_prob).all())
+
+    def test_log_prob_matches_torch_transformed_distribution(self):
+        ac = ActorCritic({"actor_hidden": [4], "critic_hidden": [4],
+                          "action_low": [-2., -1.], "action_high": [2., 3.]}, 4, 4, 2)
+        latent = {"h": torch.zeros(16, 4), "z": torch.zeros(16, 2, 2)}
+        out = ac.act(latent)
+        feature = torch.cat([latent['h'], latent['z'].flatten(1)], -1)
+        mean, log_std = ac.actor.net(feature).chunk(2, -1)
+        normal = torch.distributions.Normal(mean.clamp(-2, 2), log_std.clamp(np.log(.1), 0).exp())
+        dist = torch.distributions.TransformedDistribution(normal, [
+            torch.distributions.TanhTransform(cache_size=1),
+            torch.distributions.AffineTransform(torch.tensor([0., 1.]), torch.tensor([2., 2.]))])
+        torch.testing.assert_close(out.log_prob, dist.log_prob(out.action).sum(-1), atol=1e-5, rtol=1e-5)
+
     def test_conversion_keeps_resets_and_true_terminals(self):
         replay = buffer(2, 2)
         replay.add(transition(1), is_first=True)

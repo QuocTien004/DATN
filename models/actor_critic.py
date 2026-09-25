@@ -7,6 +7,7 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions import Normal
 
 
@@ -79,6 +80,11 @@ class Actor(nn.Module):
         self.max_std = float(cfg.get("max_std", 1.0))
         self.mean_transform = str(cfg.get("mean_transform", "clamp"))
         self.std_transform = str(cfg.get("std_transform", "log_clamp"))
+        # Keep historical checkpoints resumable; new configs opt into entropy
+        # of the executed (tanh-squashed) action, not the unbounded Normal.
+        self.entropy_mode = str(cfg.get("entropy_mode", "normal"))
+        if self.entropy_mode not in {"normal", "squashed"}:
+            raise ValueError("entropy_mode must be normal or squashed")
         if self.mean_transform not in {"clamp", "tanh"} or self.std_transform not in {"log_clamp", "sigmoid"}:
             raise ValueError("Unsupported actor distribution transform")
         if not 0.0 < self.min_std <= self.max_std:
@@ -137,13 +143,16 @@ class Actor(nn.Module):
         action = bias + scale * normalized_action
 
         # Change-of-variables correction for tanh and optional action rescaling.
-        jacobian = scale * (1.0 - normalized_action.square())
+        # Stable log(1 - tanh(x)^2), including near saturated actions.
+        log_jacobian = scale.log() + 2.0 * (log(2.0) - pre_tanh - F.softplus(-2.0 * pre_tanh))
         log_prob = (
-            distribution.log_prob(pre_tanh) - torch.log(jacobian + 1e-6)
+            distribution.log_prob(pre_tanh) - log_jacobian
         ).sum(dim=-1)
-        # Standard DreamerV3 Gaussian entropy (sum over action dimensions).
-        # Avoids tanh change-of-variable singularities when actions approach +/- 1.
+        # H(tanh(X)) = H(X) + E[log |J|]. The reparameterized sample gives
+        # a gradient that discourages mean saturation as well as adjusting std.
         entropy = distribution.entropy().sum(dim=-1)
+        if self.entropy_mode == "squashed":
+            entropy = entropy + log_jacobian.sum(dim=-1)
         return PolicyOutput(
             action=action,
             log_prob=log_prob,

@@ -11,7 +11,9 @@ Usage
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -43,7 +45,8 @@ from utils.online_state import resolve_resume_path, resolve_replay_path, validat
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Online RL training loop")
-    p.add_argument("--config", type=str, default="configs/train.yaml")
+    p.add_argument("--config", type=str, default=None,
+                   help="Training YAML; on resume defaults to saved settings")
     p.add_argument("--env-config", type=str, default=None)
     p.add_argument("--wm-config", type=str, default=None)
     p.add_argument("--buffer", type=str, default=None,
@@ -53,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--resume", type=str, default=None,
                    help="Online checkpoint to resume from")
     p.add_argument("--ckpt-dir", type=str, default=None,
-                   help="Custom checkpoint output directory (e.g., checkpoints/exp_01)")
+                   help="Output root; online/ is appended (e.g., checkpoints/exp_01)")
     p.add_argument("--exp-name", type=str, default=None,
                    help="Custom experiment name for logging")
     p.add_argument("--total-steps", type=int, default=None)
@@ -63,6 +66,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--eval-every", type=int, default=None)
     p.add_argument("--eval-episodes", type=int, default=None)
+    p.add_argument("--eval-horizon", type=int, default=None,
+                   help="Optional eval-only time limit; bounded diagnostics are not full-policy evaluation")
     p.add_argument("--ckpt-every", type=int, default=None)
     p.add_argument("--device", type=str, default=None, help="cpu | cuda")
     p.add_argument("--demo-buffer", type=str, default=None, help="Protected bootstrap/demo replay for mixed sampling")
@@ -81,7 +86,13 @@ def _resolve_device(name: str | None) -> torch.device:
 
 def main() -> None:
     args = parse_args()
-    configs = load_experiment_configs(args.config, args.env_config, args.wm_config)
+    configs = load_experiment_configs(args.config or "configs/train.yaml", args.env_config, args.wm_config)
+    resume_path = resolve_resume_path(args.resume) if args.resume else None
+    resume_ckpt = load_checkpoint(resume_path, map_location="cpu") if resume_path else None
+    if resume_ckpt is not None:
+        require_current_contract(resume_ckpt)
+    if resume_ckpt is not None and args.config is None:
+        configs["train"] = copy.deepcopy(resume_ckpt["train_cfg"])
     train_cfg = configs["train"]
     if args.seed is not None:
         train_cfg["seed"] = args.seed
@@ -90,14 +101,13 @@ def main() -> None:
     paths_cfg = train_cfg.setdefault("paths", {})
     if args.ckpt_dir:
         paths_cfg["checkpoint_dir"] = args.ckpt_dir
+    if Path(paths_cfg.get("checkpoint_dir", "checkpoints")).name == "online":
+        print("[warn] --ckpt-dir is a run ROOT; script appends online/. This path will produce online/online/.", flush=True)
     if args.exp_name:
         train_cfg["experiment_name"] = args.exp_name
     if args.log_dir:
         paths_cfg["log_dir"] = args.log_dir
-    resume_path = resolve_resume_path(args.resume) if args.resume else None
-    resume_ckpt = load_checkpoint(resume_path, map_location="cpu") if resume_path else None
     if resume_ckpt is not None:
-        require_current_contract(resume_ckpt)
         train_cfg["actor_critic"] = resume_ckpt["actor_critic_cfg"]
         if args.env_config is None:
             configs["env"] = resume_ckpt["env_cfg"]
@@ -233,6 +243,12 @@ def main() -> None:
     eval_env_cfg = dict(env_cfg)
     eval_env_cfg["start_seed"] = eval_start_seed
     eval_env_cfg["num_scenarios"] = eval_episodes
+    eval_horizon = args.eval_horizon if args.eval_horizon is not None else eval_cfg_section.get("horizon")
+    if eval_horizon is not None:
+        if int(eval_horizon) <= 0:
+            raise ValueError("eval horizon must be positive")
+        eval_env_cfg["horizon"] = int(eval_horizon)
+        eval_cfg_section["horizon"] = int(eval_horizon)
 
     demo_buffer = None
     demo_ratio = float(train_cfg.get("buffer", {}).get("demo_ratio", 0.0))
@@ -287,7 +303,26 @@ def main() -> None:
         raise ValueError("Invalid training counts/intervals")
     revision = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     dirty = bool(subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True).stdout.strip())
-    manifest = {"configs": configs, "args": vars(args), "git_revision": revision, "git_dirty": dirty, "transition_contract": 2}
+    # Store effective CLI overrides in checkpoints as well as a readable manifest.
+    online_cfg.update(total_env_steps=total_steps, steps_per_iter=steps_per_iter,
+                      world_model_updates=wm_updates, actor_critic_updates=ac_updates,
+                      eval_every=eval_every, checkpoint_every=ckpt_every)
+    train_cfg["train"] = online_cfg
+    train_cfg.setdefault("wm_train", {})["batch_size"] = batch_size
+    train_cfg.setdefault("eval", {})["num_episodes"] = eval_episodes
+    if eval_horizon is not None:
+        train_cfg["eval"]["horizon"] = int(eval_horizon)
+    train_cfg["device"] = str(device)
+    manifest = {"configs": configs, "args": vars(args), "git_revision": revision, "git_dirty": dirty, "transition_contract": 2,
+                "runtime": {"python": sys.version, "torch": torch.__version__, "device": str(device),
+                            "render_backend": os.environ.get("DATN_RENDER_BACKEND", "default"),
+                            "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None}}
+    manifest_path = logger.log_dir / f"run_start_{start_env_steps:06d}.json"
+    suffix = 1
+    while manifest_path.exists():
+        manifest_path = logger.log_dir / f"run_start_{start_env_steps:06d}_{suffix}.json"
+        suffix += 1
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     (logger.log_dir / "resolved_config.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     print(

@@ -1,8 +1,9 @@
 # Hướng dẫn train lại và lưu artifact
 
-Cập nhật 2026-09-24, branch `Bao`. Đọc [RETRAINING_NOTES.md](RETRAINING_NOTES.md)
-để biết vì sao cần pretrain lại. Checkpoint cũ dùng để đối chiếu/eval; không resume
-training trực tiếp sau khi đổi transition contract.
+Cập nhật 2026-09-25, branch `Bao`. Đọc [review Br_Bao](PILOT_REVIEW_20260925.md):
+v2 chạy đúng pipeline nhưng 50k vẫn success 0%. Chạy gate 2k ở mục 5 trước khi
+đầu tư train dài. Chỉ checkpoint legacy **không có contract 2** mới bắt buộc
+pretrain WM lại; WM 5k contract 2 của Br_Bao có thể dùng để khởi tạo pilot mới.
 
 ## 1. Môi trường Python 3.10 trên Colab
 
@@ -26,11 +27,36 @@ vẫn là 3.13; các command bên dưới gọi thẳng Python 3.10 trong venv.
 Trên Windows: tạo venv bằng `py -3.10 -m venv .venv`, activate và cài Torch +
 `requirements.txt` theo README. Không dùng Xvfb trên Windows.
 
+### Camera trên GPU Colab (tùy chọn, tiết kiệm thời gian)
+
+Có CUDA không có nghĩa camera đang render trên GPU. Runtime T4 ngày 25/09 dùng
+`llvmpipe` khi chạy Xvfb: probe 30 steps khoảng 0,835 giây/step. Với NVIDIA EGL,
+renderer báo `Tesla T4/PCIe/SSE2`, probe khoảng 0,0103 giây/step (không tính model
+update và startup; không coi đây là tốc độ train tổng thể).
+
+```bash
+/content/datn_py310/bin/python /content/DATN/scripts/setup_colab_egl.py
+```
+
+Script tải và **giải nén** thư viện OpenGL đúng phiên bản driver hiện tại từ apt
+repository đã cấu hình, dưới `/content/datn_nvidia_gl/`. Không cài/thay kernel
+driver. Nếu không tìm được package khớp, dừng và dùng Xvfb, không tự chọn driver
+khác. Copy ba dòng `export` được in vào **cùng cell shell** với lệnh train/eval.
+Sau đó chạy Python trực tiếp, bỏ `xvfb-run -a`. `DATN_RENDER_BACKEND=egl` chỉ hỗ
+trợ headless (`use_render: false`). Không dùng setup này trên Windows.
+
+Runtime đã thử có driver 580.82.07, package `libnvidia-gl-580=580.82.07-0ubuntu1`.
+Backend/default, GPU và phiên bản Torch được ghi trong run manifest. Chuyển
+renderer có thể gây khác biệt pixel; ghi backend khi so sánh các experiment.
+
 ## 2. Đúng bộ dữ liệu và checkpoint
 
-Ở Drive của nhóm, bộ mới đã được đặt dưới `DoAn/data/replay_buffer/` và
-`DoAn/checkpoints/`. Hai file `DoAn/bootstrap.npz` và `DoAn/latest.pt` ở cấp ngoài
-là bộ cũ 256×256; đừng trộn với bộ mới 64×64.
+Drive hiện chia `DoAn/Br_Bao/` và `DoAn/Br_Tien/`. Bộ đã kiểm tra ngày 25/09:
+`DoAn/Br_Bao/data/replay_buffer/bootstrap_v2.npz` (25k, 64×64),
+`DoAn/Br_Bao/checkpoints/retrain_v2/world_model/latest.pt` (5k updates),
+`DoAn/Br_Bao/checkpoints/retrain_v2/online/online/latest.pt` (50k env steps).
+Thư mục `online/online` của bộ này là do truyền dư `/online` vào `--ckpt-dir`.
+Không trộn bootstrap/checkpoint 256×256 legacy với bộ 64×64.
 
 Copy file cần dùng từ Drive sang `/content` trước khi load. Replay giải nén và
 tạo mmap cạnh `.npz`, nên đọc trực tiếp từ Drive vừa chậm vừa tạo I/O lớn.
@@ -90,28 +116,37 @@ $PY scripts/train_world_model.py --device cuda --updates 1000 \
 `--updates` của WM là số update thêm. Training loss thấp chưa đủ chứng minh WM
 dự đoán đúng terminal/reward ở trajectory chưa thấy; cần xem rollout và eval.
 
-## 5. Pilot online 50k steps
+## 5. Gate online 2k trước khi train dài
+
+Không resume actor 50k để thử entropy mới; tạo actor mới từ WM pretrain contract 2.
+Với bộ Br_Bao đã có, copy bootstrap và WM vào đường dẫn tương ứng dưới `/content/DATN`
+rồi bỏ qua collect/pretrain. Không copy mmap; nó được tạo lại từ `.npz`.
 
 ```bash
 %%bash
 set -e
 cd /content/DATN
 PY=/content/datn_py310/bin/python
-xvfb-run -a $PY scripts/train_online.py --device cuda --seed 0 \
-  --total-steps 50000 --steps-per-iter 1000 \
+xvfb-run -a $PY scripts/train_online.py --config configs/train_pilot.yaml --device cuda --seed 0 \
+  --total-steps 2000 --eval-episodes 2 --eval-horizon 200 \
   --buffer data/replay_buffer/bootstrap_v2.npz \
   --demo-buffer data/replay_buffer/bootstrap_v2.npz \
   --wm-checkpoint checkpoints/retrain_v2/world_model/latest.pt \
-  --ckpt-dir checkpoints/retrain_v2 --log-dir logs/retrain_v2_online
+  --ckpt-dir checkpoints/pilot_v3_s0 --log-dir logs/pilot_v3_s0
 ```
 
-Mỗi 1000 env steps có 25 WM và 25 Actor-Critic updates. Batch 8 lấy 2 sequences
+`--ckpt-dir` nhận **root của run**, không thêm `/online`. Trên Windows bỏ
+`xvfb-run -a`; gọi Python của venv 3.10. Training horizon vẫn 1000; chỉ eval bị
+giới hạn 200 để chẩn đoán nhanh. Không so success/route của eval ngắn với eval
+1000 steps cũ như cùng một benchmark.
+
+Mỗi 250 env steps có 25 WM và 5 Actor-Critic updates. Batch 8 lấy 2 sequences
 từ bootstrap được giữ riêng, 6 từ replay online. `term_ratio: 0.25` là tỷ lệ
 sequence bắt buộc chứa một episode boundary; phần uniform còn lại vẫn có thể
 chứa terminal, không có nghĩa chính xác 25% transition là crash.
 
-Actor mới: std trong `[0.1,0.5]`, init 0.3, entropy coefficient 0.003, không cộng
-noise ngoài policy. Các số này là cấu hình pilot cần đánh giá, chưa phải nghiệm
+Actor pilot: std trong `[0.1,0.5]`, init 0.3, squashed entropy coefficient 0.01,
+imagination 15, không cộng noise ngoài policy. Các số này cần đánh giá, chưa phải nghiệm
 tối ưu đã xác minh. Reward coefficients được giữ nguyên để tránh đổi cả mục tiêu
 học cùng lúc với các lỗi pipeline.
 
@@ -123,23 +158,41 @@ Theo dõi success/out-of-road và route completion qua nhiều mốc. Thêm các
 `ac/continue_probability_mean` bỏ gamma. Không dùng ngưỡng 0.95 cho trung bình
 continue để tự kết luận model nhận biết crash: cần xem riêng terminal samples.
 
-Nên thử ít nhất seed 0, 1, 2 với output/log riêng. Chỉ nối lên 100k/500k khi route
-completion cải thiện lặp lại, bắt đầu có success và out-of-road giảm. Không tăng
-độ khó sang Stage 2 khi Stage 1 vẫn success 0%.
+Thêm `rollout/idle_fraction`, `rollout/collection_seconds`; `eval_step_*.json` ghi
+từng seed, horizon và terminal/truncated. Nếu không có episode hoàn tất trong
+một đoạn 250 steps, metrics episode của đoạn là 0, không có nghĩa xe thất bại 0%.
+
+Gate chấp nhận kỹ thuật: loss/gradient hữu hạn, model/replay khớp step, resume và
+eval hoạt động. Gate chất lượng khác: xe có tiến lên, không liên tục đứng yên hoặc
+steering dồn một phía; eval đủ horizon và nhiều seed phải cải thiện. Chỉ pass gate
+kỹ thuật **không** đủ để giao train 50k/500k. Nên thử seed 0,1,2 với output riêng;
+không tăng Stage 2 khi Stage 1 vẫn success 0%.
+
+Eval đầy đủ sau pilot (giữ mặc định horizon 1000 trong checkpoint):
+
+```bash
+xvfb-run -a $PY scripts/eval.py --device cuda --episodes 20 --start-seed 10000 \
+  --checkpoint checkpoints/pilot_v3_s0/online/latest.pt \
+  --output logs/pilot_v3_s0/eval_full.json
+```
+
+Không resume để chạy tiếp dài cho tới khi đã xem gate. Nếu cần nối thử đến 5k,
+lệnh ở mục 6 giữ đúng setting pilot; `--eval-horizon 1000` khôi phục eval đầy đủ.
 
 ## 6. Lưu và resume đúng cặp
 
 ```text
-checkpoints/retrain_v2/
-  world_model/latest.pt
+checkpoints/pilot_v3_s0/
   online/
     latest.pt
     online_buffer.npz
-    online_step_020000.pt
+    online_step_001000.pt
     ...
-logs/retrain_v2_online/
+logs/pilot_v3_s0/
   metrics.jsonl
   resolved_config.json
+  run_start_000000.json
+  eval_step_001000.json
 ```
 
 `latest.pt` chứa tất cả WM, Actor/Critic, optimizer, config và counters. Replay
@@ -149,18 +202,28 @@ chỉ resume được nếu còn replay đúng mốc đó. Repo chỉ giữ mộ
 để tránh nhân bản hàng trăm MB mỗi lần save.
 
 ```bash
-xvfb-run -a $PY scripts/train_online.py --device cuda --total-steps 100000 \
-  --resume checkpoints/retrain_v2/online/latest.pt \
+xvfb-run -a $PY scripts/train_online.py --device cuda --total-steps 5000 \
+  --resume checkpoints/pilot_v3_s0/online/latest.pt \
   --demo-buffer data/replay_buffer/bootstrap_v2.npz \
-  --ckpt-dir checkpoints/retrain_v2 --log-dir logs/retrain_v2_online
+  --eval-horizon 1000 \
+  --ckpt-dir checkpoints/pilot_v3_s0 --log-dir logs/pilot_v3_s0
 ```
 
 Không cần `--wm-checkpoint` khi resume online. Không truyền bootstrap qua `--buffer`
 trong lệnh resume. `--total-steps` là mốc tổng. `--eval-every 0` và `--ckpt-every 0`
 tắt tác vụ định kỳ tương ứng; cuối training vẫn save.
 
+Lệnh trên chỉ là ví dụ nối pilot **sau khi đã xem kết quả**, không phải khuyến nghị
+tự động train tiếp nếu xe vẫn đứng yên/lệch lái.
+
+Không truyền `--config` thì resume lấy training config từ checkpoint, không rơi
+về defaults của `train.yaml`. CLI overrides vẫn có hiệu lực. Actor config luôn
+lấy từ checkpoint; muốn thử entropy/horizon của Actor mới cần run khởi tạo mới.
+Manifest `resolved_config.json` phản ánh setting thực thi, `run_start_*.json` giữ
+lịch sử từng lần chạy và phiên bản Python/Torch/GPU.
+
 Để lưu lên Drive: sau khi tiến trình dừng ở checkpoint hoàn chỉnh, copy cả thư mục
-`checkpoints/retrain_v2/`, `logs/retrain_v2_online/`, bootstrap và config vào thư
+`checkpoints/pilot_v3_s0/`, `logs/pilot_v3_s0/`, bootstrap và config vào thư
 mục run mới trên Drive. Không copy `latest.pt` ở một thời điểm rồi replay sau khi
 training đã ghi mốc mới. Mỗi file được ghi tạm rồi rename; cặp model/replay có kiểm
 tra step để phát hiện gián đoạn giữa hai lần ghi. Không có snapshot trạng thái
@@ -170,8 +233,8 @@ simulator/RNG, nên resume bắt đầu episode mới, không tái hiện bit-fo
 
 ```bash
 xvfb-run -a $PY scripts/eval.py --device cuda --episodes 20 --start-seed 10000 \
-  --checkpoint checkpoints/retrain_v2/online/latest.pt \
-  --output logs/retrain_v2_online/eval.json
+  --checkpoint checkpoints/pilot_v3_s0/online/latest.pt \
+  --output logs/pilot_v3_s0/eval.json
 ```
 
 Eval dùng WM và Actor cùng checkpoint, env config trong checkpoint, seed cố định

@@ -50,6 +50,7 @@ actor_critic:
   max_std: 0.5
   mean_transform: tanh    # smooth bound; prevents hard-clamp zero-gradient lock
   std_transform: sigmoid # smooth bounded std; fresh Actor only
+  entropy_mode: squashed # entropy of actual bounded actions, includes tanh Jacobian
   imagination_horizon: 30  # extended horizon (~3.0s) so Actor sees crashes at step 35-50
   gamma: 0.997             # restored long-horizon discount (~333 steps) paired with DreamerV3 return normalization
   lambda: 0.95

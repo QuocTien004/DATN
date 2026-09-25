@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import gc
+import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +126,8 @@ class OnlineTrainer:
         action_sum = np.zeros(self.buffer.action_dim, dtype=np.float64)
         action_saturated = np.zeros(self.buffer.action_dim, dtype=np.float64)
         diagnostic_sums = {key: 0.0 for key in ("reward_base", "reward_shaping", "lateral_available", "lateral_factor")}
+        started = time.monotonic()
+        idle_steps = 0
 
         for _ in range(num_steps):
             action = policy(self._obs)
@@ -143,6 +147,7 @@ class OnlineTrainer:
                 noisy_action
             )
             done = bool(terminated or truncated)
+            idle_steps += float(info.get("velocity", float("inf"))) < 1.0
             action_sum += noisy_action
             action_saturated += np.abs(noisy_action) > 0.9
             for key in diagnostic_sums:
@@ -207,6 +212,8 @@ class OnlineTrainer:
                 float(np.mean(route_completions)) if route_completions else 0.0
             ),
             "buffer_size": len(self.buffer),
+            "idle_fraction": idle_steps / max(num_steps, 1),
+            "collection_seconds": time.monotonic() - started,
             "steering_mean": float(action_sum[0] / max(num_steps, 1)),
             "throttle_mean": float(action_sum[1] / max(num_steps, 1)),
             "steering_saturation": float(action_saturated[0] / max(num_steps, 1)),
@@ -380,8 +387,14 @@ class OnlineTrainer:
                         episode_length=episode_length,
                     )
                 )
+                episode_metrics[-1]["seed"] = start_seed + _ep
+                episode_metrics[-1]["terminated"] = bool(terminated)
+                episode_metrics[-1]["truncated"] = bool(truncated)
+                print(f"[Eval] seed={start_seed + _ep} steps={episode_length} route={episode_metrics[-1].get('route_completion', 0):.4f} success={success}", flush=True)
 
             metrics = aggregate_episode_metrics(episode_metrics)
+            output = self.logger.log_dir / f"eval_step_{self.env_steps:06d}.json"
+            output.write_text(json.dumps({"env_steps": self.env_steps, "horizon": self.eval_env_cfg.get("horizon", 1000), "aggregate": metrics, "episodes": episode_metrics}, indent=2), encoding="utf-8")
         finally:
             eval_env.close()
 
