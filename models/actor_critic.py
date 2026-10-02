@@ -73,10 +73,10 @@ class Actor(nn.Module):
         # prior for the observed control vector has been implemented/validated.
         self.control_state_dim = int(cfg.get("control_state_dim", 0))
         self.control_state_source = str(cfg.get("control_state_source", "observed"))
-        if self.control_state_source not in {"observed", "predicted"}:
-            raise ValueError("control_state_source must be observed or predicted")
-        if self.control_state_source == "predicted" and not self.control_state_dim:
-            raise ValueError("predicted control requires control_state_dim")
+        if self.control_state_source not in {"observed", "predicted", "continuous"}:
+            raise ValueError("control_state_source must be observed, predicted or continuous")
+        if self.control_state_source in {"predicted", "continuous"} and not self.control_state_dim:
+            raise ValueError("model control requires control_state_dim")
         if self.control_state_dim < 0:
             raise ValueError("control_state_dim must be nonnegative")
         if self.control_state_dim:
@@ -202,8 +202,19 @@ class Critic(nn.Module):
         super().__init__()
         self.deter_dim = int(deter_dim)
         self.stoch_size = int(stoch_size)
+        self.control_state_dim = int(cfg.get('critic_control_state_dim', 0))
+        if self.control_state_dim < 0:
+            raise ValueError('critic_control_state_dim must be nonnegative')
+        if self.control_state_dim:
+            mean = torch.as_tensor(cfg.get('control_state_mean', []), dtype=torch.float32)
+            std = torch.as_tensor(cfg.get('control_state_std', []), dtype=torch.float32)
+            if (mean.shape != (self.control_state_dim,) or std.shape != mean.shape
+                    or not torch.isfinite(mean).all() or not torch.isfinite(std).all() or (std <= 0).any()):
+                raise ValueError('Critic requires matching finite control normalization')
+            self.register_buffer('control_state_mean', mean.clone())
+            self.register_buffer('control_state_std', std.clone())
         hidden = [int(x) for x in cfg.get("critic_hidden", [512, 512])]
-        self.net = _mlp(self.deter_dim + self.stoch_size, hidden, 1)
+        self.net = _mlp(self.deter_dim + self.stoch_size + self.control_state_dim, hidden, 1)
 
         # Zero-initialize the critic head for stable early value estimation
         head = self.net[-1]
@@ -211,13 +222,19 @@ class Critic(nn.Module):
         nn.init.zeros_(head.weight)
         nn.init.zeros_(head.bias)
 
-    def forward(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def forward(self, h: torch.Tensor, z: torch.Tensor, *, control_state: torch.Tensor | None = None) -> torch.Tensor:
         feature = latent_feature(
             h,
             z,
             deter_dim=self.deter_dim,
             stoch_size=self.stoch_size,
         )
+        if self.control_state_dim:
+            if control_state is None or control_state.shape != (h.shape[0], self.control_state_dim) or not torch.isfinite(control_state).all():
+                raise ValueError('Critic requires finite model control state (B,D)')
+            feature = torch.cat([feature, (control_state-self.control_state_mean)/self.control_state_std], -1)
+        elif control_state is not None:
+            raise ValueError('This Critic does not accept a control state')
         return self.net(feature).squeeze(-1)
 
 
@@ -260,10 +277,12 @@ class ActorCritic(nn.Module):
             raise ValueError("BC control bridge has no validated learned control-state prior; imagination/RL is disabled")
 
     def value(self, state: dict[str, torch.Tensor]) -> torch.Tensor:
-        return self.critic(state["h"], state["z"])
+        kwargs = {'control_state': state.get('control')} if self.critic.control_state_dim else {}
+        return self.critic(state["h"], state["z"], **kwargs)
 
     def slow_value(self, state: dict[str, torch.Tensor]) -> torch.Tensor:
-        return self.slow_critic(state["h"], state["z"])
+        kwargs = {'control_state': state.get('control')} if self.slow_critic.control_state_dim else {}
+        return self.slow_critic(state["h"], state["z"], **kwargs)
 
     def update_slow_critic(self, tau: float = 0.02) -> None:
         """Polyak EMA update for Slow Critic parameters."""

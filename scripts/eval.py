@@ -130,8 +130,8 @@ def main() -> None:
             print("[warn] Legacy online checkpoint has no Actor config; using original clamp transforms and std bounds 0.30..1.0")
         # Diagnostic exports carry this explicit metadata as well as new Actor
         # configs. Never silently evaluate a predicted-state checkpoint with GT.
-        if agent_checkpoint.get("control_input") == "predicted":
-            ac_cfg = dict(ac_cfg, control_state_source="predicted")
+        if agent_checkpoint.get("control_input") in {'predicted', 'continuous'}:
+            ac_cfg = dict(ac_cfg, control_state_source=agent_checkpoint['control_input'])
         actor_critic = ActorCritic(
             ac_cfg,
             rssm.deter_dim,

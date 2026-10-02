@@ -45,11 +45,11 @@ def main() -> None:
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--control-state", action="store_true", help="Experimental observed-state BC bridge; RL/imagination remains disabled")
-    parser.add_argument("--control-state-source", choices=["observed", "predicted"], default="observed",
+    parser.add_argument("--control-state-source", choices=["observed", "predicted", "continuous"], default="observed",
                         help="Predicted requires --control-state and a WM checkpoint with the learned head")
     args = parser.parse_args()
-    if args.control_state_source == "predicted" and not args.control_state:
-        parser.error("--control-state-source predicted requires --control-state")
+    if args.control_state_source in {'predicted', 'continuous'} and not args.control_state:
+        parser.error("model-state source requires --control-state")
     if min(args.updates, args.batch_size, args.save_every, args.lr) <= 0:
         parser.error("updates, batch-size, save-every and lr must be positive")
     out = Path(args.out_dir)
@@ -90,6 +90,8 @@ def main() -> None:
                       control_state_std=np.maximum(vectors.std(0, ddof=1), 1e-4).tolist())
     if args.control_state_source == "predicted" and "control_state" not in wm:
         raise ValueError("Predicted-state BC requires a WM checkpoint with control_state predictor")
+    if args.control_state_source == 'continuous' and getattr(wm['rssm'], 'continuous', None) is None:
+        raise ValueError('Continuous BC requires a continuous RSSM checkpoint')
     ac = ActorCritic(ac_cfg, wm["rssm"].deter_dim, wm["rssm"].stoch_size, replay.action_dim).to(device)
     optimizer = torch.optim.Adam(ac.actor.parameters(), lr=args.lr)
     out.mkdir(parents=True, exist_ok=True)
@@ -133,6 +135,8 @@ def main() -> None:
                 kind = "behavior_cloning_control_diagnostic" if ac.actor.control_state_dim else "behavior_cloning"
                 if ac.actor.control_state_source == "predicted":
                     kind = "predicted_control_bc_diagnostic"
+                if ac.actor.control_state_source == 'continuous':
+                    kind = 'continuous_control_bc_diagnostic'
                 payload.update(checkpoint_kind=kind, bc_updates=update,
                     control_input=ac.actor.control_state_source if ac.actor.control_state_dim else "latent",
                     actor_critic=ac.state_dict(), actor_critic_cfg=ac_cfg,

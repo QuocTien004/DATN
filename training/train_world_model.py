@@ -45,10 +45,12 @@ def train_world_model_step(
     Never enable it on mixed/random replay. The joint optimizer must contain
     exactly all WM parameters and Actor parameters, never either Critic.
     """
-    if imitation_actor is not None and getattr(imitation_actor, "control_state_source", "observed") == "predicted":
+    if imitation_actor is not None and getattr(imitation_actor, "control_state_source", "observed") in {'predicted', 'continuous'}:
         raise ValueError("Joint WM imitation with predicted control is not implemented; use frozen predicted-state BC")
     enc = models["encoder"]
     rssm = models["rssm"]
+    if getattr(rssm, 'continuous', None) is not None:
+        raise ValueError('Continuous RSSM requires explicit branch training; legacy WM loss omits its supervision')
     dec = models["decoder"]
     reward_pred = models["reward"]
     continue_pred = models["continue"]

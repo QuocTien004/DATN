@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .continuous_state import ContinuousState
+
 
 def _cat_state_action(z: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
     """z: (B, stoch_dim, stoch_classes) → flat; action: (B, A)."""
@@ -44,6 +46,9 @@ class RSSM(nn.Module):
         self.embed_dim = int(embed_dim)
         self.action_dim = int(action_dim)
         rssm_cfg = cfg.get("rssm", {})
+        self.categorical_embed_dim = int(rssm_cfg.get('categorical_embed_dim', self.embed_dim))
+        if not 0 < self.categorical_embed_dim <= self.embed_dim:
+            raise ValueError('Invalid categorical embedding prefix dimension')
         self.deter_dim = int(rssm_cfg.get("deter_dim", 512))
         self.stoch_dim = int(rssm_cfg.get("stoch_dim", 32))
         self.stoch_classes = int(rssm_cfg.get("stoch_classes", 32))
@@ -62,10 +67,13 @@ class RSSM(nn.Module):
             nn.Linear(hidden, self.stoch_size),
         )
         self.posterior_net = nn.Sequential(
-            nn.Linear(self.deter_dim + self.embed_dim, hidden),
+            nn.Linear(self.deter_dim + self.categorical_embed_dim, hidden),
             nn.ReLU(inplace=True),
             nn.Linear(hidden, self.stoch_size),
         )
+        continuous_cfg = rssm_cfg.get('continuous_state')
+        self.continuous = (ContinuousState(continuous_cfg, self.embed_dim, self.action_dim)
+                           if continuous_cfg is not None else None)
 
     def initial_state(self, batch_size: int, device: torch.device | str | None = None) -> dict[str, torch.Tensor]:
         device = torch.device(device) if device is not None else next(self.parameters()).device
@@ -73,7 +81,29 @@ class RSSM(nn.Module):
         # Uniform one-hot start (first class)
         z = torch.zeros(batch_size, self.stoch_dim, self.stoch_classes, device=device)
         z[..., 0] = 1.0
-        return {"h": h, "z": z}
+        state = {"h": h, "z": z}
+        if self.continuous is not None:
+            state['c'] = torch.zeros(batch_size, self.continuous.dim, device=device)
+        return state
+
+    def warm_start_categorical(self, saved: dict[str, torch.Tensor]) -> None:
+        """Explicit migration only: all and only new branch keys may be absent.
+
+        Normal checkpoint loading remains strict. Do not restore a legacy
+        optimizer after this migration: its parameter slots have changed.
+        """
+        if self.continuous is None:
+            raise ValueError('Warm start requires a new continuous branch')
+        expected = self.state_dict()
+        legacy = {k for k in expected if not k.startswith('continuous.')}
+        if set(saved) != legacy:
+            raise ValueError('Warm start must contain exactly the categorical RSSM keys')
+        for key in legacy:
+            if saved[key].shape != expected[key].shape:
+                raise ValueError(f'Warm start shape mismatch: {key}')
+        result = self.load_state_dict(saved, strict=False)
+        if set(result.missing_keys) != set(expected) - legacy or result.unexpected_keys:
+            raise RuntimeError('Unexpected warm start mismatch')
 
     def _logits_to_grouped(self, logits_flat: torch.Tensor) -> torch.Tensor:
         return logits_flat.reshape(-1, self.stoch_dim, self.stoch_classes)
@@ -107,17 +137,23 @@ class RSSM(nn.Module):
             z_init = torch.zeros_like(prev_state["z"])
             z_init[..., 0] = 1.0
             z_prev = (1.0 - z_mask) * prev_state["z"] + z_mask * z_init
-            prev_state = {"h": h_prev, "z": z_prev}
+            reset_state = {"h": h_prev, "z": z_prev}
+            if self.continuous is not None:
+                reset_state['c'] = (1.0 - mask) * prev_state['c']
+            prev_state = reset_state
             action = (1.0 - mask) * action
 
         h = self._deter_step(prev_state, action)
         prior_logits = self._logits_to_grouped(self.prior_net(h))
         post_logits = self._logits_to_grouped(
-            self.posterior_net(torch.cat([h, embed], dim=-1))
+            self.posterior_net(torch.cat([h, embed[:, :self.categorical_embed_dim]], dim=-1))
         )
         z = sample_categorical(post_logits, deterministic=deterministic)
         state = {"h": h, "z": z}
         stats = {"prior_logits": prior_logits, "posterior_logits": post_logits}
+        if self.continuous is not None:
+            state['c'] = self.continuous.observe(embed)
+            stats['continuous_prior'] = self.continuous.imagine(prev_state['c'], action)
         return state, stats
 
     def imagine_step(
@@ -135,6 +171,8 @@ class RSSM(nn.Module):
         z_hat = sample_categorical(prior_logits, deterministic=deterministic)
         state = {"h": h, "z": z_hat}
         stats = {"prior_logits": prior_logits}
+        if self.continuous is not None:
+            state['c'] = self.continuous.imagine(prev_state['c'], action)
         return state, stats
 
     def get_feature(self, state: dict[str, torch.Tensor]) -> torch.Tensor:

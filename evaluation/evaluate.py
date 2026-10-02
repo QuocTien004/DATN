@@ -11,6 +11,7 @@ from envs.metadrive_wrapper import MetaDriveImageEnv
 from evaluation.metrics import aggregate_episode_metrics, compute_episode_metrics
 from models.actor_critic import ActorCritic
 from models.control_state import with_predicted_control
+from models.continuous_state import with_continuous_control
 
 
 class LatentActorPolicy:
@@ -32,6 +33,11 @@ class LatentActorPolicy:
         self.device = device
         self.deterministic = bool(deterministic)
         self.control_predictor = control_predictor
+        if actor_critic.actor.control_state_source == 'continuous':
+            if getattr(rssm, 'continuous', None) is None or control_predictor is not None:
+                raise ValueError('Continuous Actor requires continuous RSSM, not a readout or GT fallback')
+            if rssm.continuous.dim != actor_critic.actor.control_state_dim:
+                raise ValueError('Continuous Actor/RSSM dimension mismatch')
         if actor_critic.actor.control_state_source == "predicted" and control_predictor is None:
             raise ValueError("Predicted-state Actor requires its control predictor; refusing GT fallback")
         if control_predictor is not None:
@@ -74,7 +80,9 @@ class LatentActorPolicy:
                 deterministic=self.deterministic,
             )
             if self.actor_critic.actor.control_state_dim:
-                if self.control_predictor is None:
+                if self.actor_critic.actor.control_state_source == 'continuous':
+                    self._latent = with_continuous_control(self._latent, self.rssm)
+                elif self.control_predictor is None:
                     self._latent["control"] = vector
                 else:
                     self._latent = with_predicted_control(self._latent, self.control_predictor)

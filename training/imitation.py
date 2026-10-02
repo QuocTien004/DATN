@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from models.actor_critic import ActorCritic
 from models.control_state import with_predicted_control
+from models.continuous_state import with_continuous_control
 from training.train_agent import posterior_start_states, _validate_optimizer_scope
 
 
@@ -36,6 +37,9 @@ def train_imitation_step(
         raise ValueError("Expert actions exceed the Actor action bounds")
     original_modes = {name: module.training for name, module in world_model.items()}
     predicted_control = actor_critic.actor.control_state_source == "predicted"
+    continuous_control = actor_critic.actor.control_state_source == 'continuous'
+    if continuous_control and getattr(world_model.get('rssm'), 'continuous', None) is None:
+        raise ValueError('Continuous BC requires the learned RSSM branch')
     if predicted_control and "control_state" not in world_model:
         raise ValueError("Predicted-state BC requires the learned control_state head")
     try:
@@ -43,11 +47,14 @@ def train_imitation_step(
             module.eval()
         states = posterior_start_states(
             batch, world_model, deterministic=deterministic_posterior,
-            include_control=actor_critic.actor.control_state_dim > 0 and not predicted_control,
+            include_control=actor_critic.actor.control_state_dim > 0 and not (predicted_control or continuous_control),
         )
         if predicted_control:
             with torch.no_grad():
                 states = with_predicted_control(states, world_model["control_state"])
+        if continuous_control:
+            with torch.no_grad():
+                states = with_continuous_control(states, world_model['rssm'])
     finally:
         for name, module in world_model.items():
             module.train(original_modes[name])
