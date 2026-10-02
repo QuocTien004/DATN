@@ -9,6 +9,7 @@ from .decoder import Decoder
 from .encoder import Encoder
 from .predictors import ContinuePredictor, RewardPredictor
 from .rssm import RSSM
+from .control_state import ControlStatePredictor
 
 
 def build_world_model(
@@ -40,6 +41,10 @@ def build_world_model(
     models["continue"] = ContinuePredictor(
         wm_cfg, rssm.deter_dim, rssm.stoch_size
     ).to(device)
+    if "control_state_predictor" in wm_cfg:
+        models["control_state"] = ControlStatePredictor(
+            wm_cfg["control_state_predictor"], rssm.deter_dim, rssm.stoch_size, state_dim
+        ).to(device)
     return models
 
 

@@ -50,6 +50,7 @@ class OnlineTrainer:
         eval_env_cfg: dict[str, Any],
         demo_buffer: ReplayBuffer | None = None,
     ) -> None:
+        actor_critic.require_imagination_ready()
         self.configs = configs
         self.buffer = buffer
         self.world_model = world_model

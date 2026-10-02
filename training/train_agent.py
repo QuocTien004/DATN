@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.actor_critic import ActorCritic
+from models.control_state import with_predicted_control
 
 
 LatentState = dict[str, torch.Tensor]
@@ -27,6 +28,7 @@ class ImaginedTrajectory:
     log_prob: torch.Tensor  # (H, B)
     entropy: torch.Tensor  # (H, B)
     std: torch.Tensor  # (H, B, action_dim)
+    control: torch.Tensor | None = None  # (H+1, B, D); predicted, never future observations
 
 
 def _unique_modules(modules: Iterable[nn.Module]) -> list[nn.Module]:
@@ -71,6 +73,8 @@ def posterior_start_states(
     world_model: dict[str, nn.Module],
     *,
     max_states: int | None = None,
+    deterministic: bool = False,
+    include_control: bool = False,
 ) -> LatentState:
     """Encode a replay sequence and return detached posterior states for imagination."""
     encoder = world_model["encoder"]
@@ -102,6 +106,7 @@ def posterior_start_states(
                 previous_action,
                 embedding[:, time],
                 is_first=first_t,
+                deterministic=deterministic,
             )
             all_h.append(current["h"])
             all_z.append(current["z"])
@@ -111,10 +116,16 @@ def posterior_start_states(
             batch_size * sequence_length,
             *all_z[0].shape[1:],
         )
+        control = vector.reshape(batch_size * sequence_length, -1) if include_control else None
         if max_states is not None and max_states > 0 and h.shape[0] > max_states:
             indices = torch.randperm(h.shape[0], device=h.device)[:max_states]
             h, z = h[indices], z[indices]
-    return {"h": h.detach(), "z": z.detach()}
+            if control is not None:
+                control = control[indices]
+    states = {"h": h.detach(), "z": z.detach()}
+    if control is not None:
+        states["control"] = control.detach()
+    return states
 
 
 def symexp(x: torch.Tensor, max_val: float) -> torch.Tensor:
@@ -132,8 +143,17 @@ def imagine_rollout(
     *,
     horizon: int,
     gamma: float,
+    diagnostic_control: bool = False,
 ) -> ImaginedTrajectory:
     """Roll the frozen RSSM prior forward under stochastic Actor actions."""
+    # Diagnostic rollouts can test an unvalidated predictor. Training entry
+    # points retain the unconditional readiness guard; this does not enable RL.
+    use_control = bool(actor_critic.actor.control_state_dim)
+    if diagnostic_control:
+        if not use_control or "control_state" not in world_model:
+            raise ValueError("diagnostic_control requires a bridge and learned control_state head")
+    else:
+        actor_critic.require_imagination_ready()
     _validate_start_states(start_states)
     if horizon <= 0:
         raise ValueError("horizon must be positive")
@@ -144,6 +164,9 @@ def imagine_rollout(
     reward_predictor = world_model["reward"]
     continue_predictor = world_model["continue"]
     current = {"h": start_states["h"], "z": start_states["z"]}
+    if use_control:
+        current = with_predicted_control(current, world_model["control_state"])
+    all_control = [current["control"]] if use_control else []
     all_h = [current["h"]]
     all_z = [current["z"]]
     actions: list[torch.Tensor] = []
@@ -160,6 +183,9 @@ def imagine_rollout(
         values.append(symexp(value_sym, max_val=6.55))
         policy = actor_critic.act(current, deterministic=False)
         next_state, _stats = rssm.imagine_step(current, policy.action)
+        if use_control:
+            next_state = with_predicted_control(next_state, world_model["control_state"])
+            all_control.append(next_state["control"])
         # Single-step reward capped at ~25.0 (ln(26) = 3.26)
         reward_sym = reward_predictor(next_state["h"], next_state["z"]).squeeze(-1)
         reward = symexp(reward_sym, max_val=3.26)
@@ -190,11 +216,14 @@ def imagine_rollout(
         log_prob=torch.stack(log_probs, dim=0),
         entropy=torch.stack(entropies, dim=0),
         std=torch.stack(stds, dim=0),
+        control=torch.stack(all_control, dim=0) if all_control else None,
     )
     for name in ("action", "reward", "discount", "value", "log_prob", "entropy", "std"):
         tensor = getattr(trajectory, name)
         if not torch.isfinite(tensor).all():
             raise FloatingPointError(f"Non-finite values in imagined {name}")
+    if trajectory.control is not None and not torch.isfinite(trajectory.control).all():
+        raise FloatingPointError("Non-finite values in imagined control")
     return trajectory
 
 
@@ -262,6 +291,7 @@ def train_actor_critic_step(
     cfg: dict[str, Any],
 ) -> dict[str, float]:
     """Run one differentiable imagination update for Actor and Critic."""
+    actor_critic.require_imagination_ready()
     ac_cfg = cfg.get("actor_critic", cfg)
     horizon = int(ac_cfg.get("imagination_horizon", 15))
     gamma = float(ac_cfg.get("gamma", 0.997))

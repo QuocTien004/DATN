@@ -69,9 +69,28 @@ class Actor(nn.Module):
         self.deter_dim = int(deter_dim)
         self.stoch_size = int(stoch_size)
         self.action_dim = int(action_dim)
+        # Opt-in BC diagnostic bridge. Do not use in imagination until a learned
+        # prior for the observed control vector has been implemented/validated.
+        self.control_state_dim = int(cfg.get("control_state_dim", 0))
+        self.control_state_source = str(cfg.get("control_state_source", "observed"))
+        if self.control_state_source not in {"observed", "predicted"}:
+            raise ValueError("control_state_source must be observed or predicted")
+        if self.control_state_source == "predicted" and not self.control_state_dim:
+            raise ValueError("predicted control requires control_state_dim")
+        if self.control_state_dim < 0:
+            raise ValueError("control_state_dim must be nonnegative")
+        if self.control_state_dim:
+            mean = torch.as_tensor(cfg.get("control_state_mean", []), dtype=torch.float32)
+            std = torch.as_tensor(cfg.get("control_state_std", []), dtype=torch.float32)
+            if (mean.shape != (self.control_state_dim,) or std.shape != mean.shape
+                    or not torch.isfinite(mean).all() or not torch.isfinite(std).all()
+                    or (std <= 0).any()):
+                raise ValueError("control state normalization requires matching finite mean and positive std")
+            self.register_buffer("control_state_mean", mean.clone())
+            self.register_buffer("control_state_std", std.clone())
         hidden = [int(x) for x in cfg.get("actor_hidden", [512, 512])]
         self.net = _mlp(
-            self.deter_dim + self.stoch_size,
+            self.deter_dim + self.stoch_size + self.control_state_dim,
             hidden,
             2 * self.action_dim,
         )
@@ -85,7 +104,7 @@ class Actor(nn.Module):
         self.entropy_mode = str(cfg.get("entropy_mode", "normal"))
         if self.entropy_mode not in {"normal", "squashed"}:
             raise ValueError("entropy_mode must be normal or squashed")
-        if self.mean_transform not in {"clamp", "tanh"} or self.std_transform not in {"log_clamp", "sigmoid"}:
+        if self.mean_transform not in {"clamp", "tanh", "identity"} or self.std_transform not in {"log_clamp", "sigmoid"}:
             raise ValueError("Unsupported actor distribution transform")
         if not 0.0 < self.min_std <= self.max_std:
             raise ValueError("Expected 0 < min_std <= max_std")
@@ -120,6 +139,7 @@ class Actor(nn.Module):
         z: torch.Tensor,
         *,
         deterministic: bool = False,
+        control_state: torch.Tensor | None = None,
     ) -> PolicyOutput:
         feature = latent_feature(
             h,
@@ -127,9 +147,22 @@ class Actor(nn.Module):
             deter_dim=self.deter_dim,
             stoch_size=self.stoch_size,
         )
+        if self.control_state_dim:
+            if (control_state is None or control_state.shape != (h.shape[0], self.control_state_dim)
+                    or not torch.isfinite(control_state).all()):
+                raise ValueError("Observed control_state with matching batch/dimension is required")
+            control = (control_state - self.control_state_mean) / self.control_state_std
+            feature = torch.cat([feature, control], dim=-1)
+        elif control_state is not None:
+            raise ValueError("control_state supplied to an Actor without the BC control bridge")
         mean, log_std = self.net(feature).chunk(2, dim=-1)
         # Legacy checkpoints use hard clamp; fresh policies use a smooth bound.
-        mean = 2.0 * torch.tanh(mean / 2.0) if self.mean_transform == "tanh" else torch.clamp(mean, -2.0, 2.0)
+        if self.mean_transform == "tanh":
+            mean = 2.0 * torch.tanh(mean / 2.0)
+        elif self.mean_transform == "clamp":
+            mean = torch.clamp(mean, -2.0, 2.0)
+        # identity leaves the pre-tanh mean unchanged; executed actions are
+        # still tanh-bounded. Used to reproduce the matched BC diagnostic head.
         if self.std_transform == "sigmoid":
             std = self.min_std + (self.max_std - self.min_std) * torch.sigmoid(log_std)
         else:
@@ -219,7 +252,12 @@ class ActorCritic(nn.Module):
         *,
         deterministic: bool = False,
     ) -> PolicyOutput:
-        return self.actor(state["h"], state["z"], deterministic=deterministic)
+        kwargs = {"control_state": state.get("control")} if self.actor.control_state_dim else {}
+        return self.actor(state["h"], state["z"], deterministic=deterministic, **kwargs)
+
+    def require_imagination_ready(self) -> None:
+        if self.actor.control_state_dim:
+            raise ValueError("BC control bridge has no validated learned control-state prior; imagination/RL is disabled")
 
     def value(self, state: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.critic(state["h"], state["z"])

@@ -52,6 +52,26 @@ class ResettablePolicy:
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_eval_distinguishes_timeout_from_terminal(self) -> None:
+        class TimeoutEnv(ShortEpisodeEnv):
+            env_cfg = {"horizon": 2}
+            def step(self, action):
+                obs, reward, done, _, info = super().step(action)
+                info["arrive_dest"] = False
+                return obs, reward, False, done, info
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "timeout.json"
+            evaluate_policy(TimeoutEnv(), ResettablePolicy(), num_episodes=1, output_path=output)
+            result = json.loads(output.read_text())
+            self.assertEqual(result["horizon"], 2)
+            self.assertTrue(result["episodes"][0]["truncated"])
+            self.assertFalse(result["episodes"][0]["terminated"])
+            self.assertEqual(result["aggregate"]["success_rate"], 0.)
+
+    def test_eval_rejects_empty_run(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive"):
+            evaluate_policy(ShortEpisodeEnv(), ResettablePolicy(), num_episodes=0)
+
     def test_collision_breakdown_and_per_seed_output(self) -> None:
         class CrashEnv(ShortEpisodeEnv):
             def step(self, action):

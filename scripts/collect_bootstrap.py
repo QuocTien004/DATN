@@ -31,6 +31,7 @@ from utils.config import load_experiment_configs
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBuffer
 from utils.seed import set_seed
+from utils.demonstrations import write_collection_manifest, bounded_expert_action
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--env-config", type=str, default=None)
     p.add_argument("--wm-config", type=str, default=None)
     p.add_argument("--steps", type=int, default=None, help="Override bootstrap.num_steps")
-    p.add_argument("--policy", type=str, default=None, choices=["mixed_expert", "random"], help="Override bootstrap.policy")
+    p.add_argument("--policy", type=str, default=None, choices=["mixed_expert", "random", "pure_expert"], help="pure_expert is deterministic, has no noise/fallback, and is suitable for imitation")
     p.add_argument("--dry-run", action="store_true", help="Reset once and print obs shapes")
     p.add_argument("--out", type=str, default=None, help="Output .npz path for buffer")
     return p.parse_args()
@@ -50,6 +51,9 @@ def main() -> None:
     configs = load_experiment_configs(args.config, args.env_config, args.wm_config)
     train_cfg = configs["train"]
     env_cfg = configs["env"]
+    out = Path(args.out or str(Path(train_cfg.get("paths", {}).get("buffer_dir", "data/replay_buffer")) / "bootstrap.npz"))
+    if not args.dry_run and out.exists():
+        raise FileExistsError(f"Replay already exists: {out}. Choose a new --out to preserve prior data.")
 
     seed = int(train_cfg.get("seed", 0))
     set_seed(seed)
@@ -94,7 +98,13 @@ def main() -> None:
             sequence_length=int(buf_cfg.get("sequence_length", 64)),
         )
 
-        if (args.policy or boot_cfg.get("policy", "mixed_expert")) == "mixed_expert":
+        policy_name = args.policy or boot_cfg.get("policy", "mixed_expert")
+        if policy_name == "pure_expert":
+            from metadrive.examples import expert
+
+            def policy_fn(obs):
+                return bounded_expert_action(expert(env._env.agent, deterministic=True), action_dim)
+        elif policy_name == "mixed_expert":
             from metadrive.examples import expert
             import numpy as np
 
@@ -110,8 +120,10 @@ def main() -> None:
                         return random_action(env.action_space)
                 else:
                     return random_action(env.action_space)
-        else:
+        elif policy_name == "random":
             policy_fn = lambda o: random_action(env.action_space)
+        else:
+            raise ValueError(f"Unknown bootstrap policy: {policy_name}")
 
         stats = collect_steps(
             env,
@@ -121,11 +133,13 @@ def main() -> None:
         )
         logger.log(stats)
 
-        out = args.out or str(
-            Path(train_cfg.get("paths", {}).get("buffer_dir", "data/replay_buffer"))
-            / "bootstrap.npz"
-        )
         saved = buffer.save(out)
+        write_collection_manifest(saved, {
+            "policy": policy_name, "expert_deterministic": policy_name == "pure_expert",
+            "action_transform": "clip[-1,1]",
+            "env_cfg": env_cfg, "seed": seed, "steps": num_steps,
+            "buffer": buffer.summary(),
+        })
         print(f"Saved buffer ({len(buffer)} transitions) -> {saved}")
         print(f"Buffer summary: {buffer.summary()}")
     finally:

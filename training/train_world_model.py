@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 import torch
 import torch.nn.functional as F
@@ -26,6 +27,9 @@ def train_world_model_step(
     models: dict[str, torch.nn.Module],
     optimizer: torch.optim.Optimizer,
     cfg: dict[str, Any],
+    *,
+    imitation_actor: torch.nn.Module | None = None,
+    imitation_weight: float = 0.0,
 ) -> dict[str, float]:
     """
     One World Model update on a sequence batch.
@@ -36,7 +40,13 @@ def train_world_model_step(
       action: (B, T, action_dim)
       reward: (B, T)
       done: (B, T) bool/float
+
+    Optional joint supervision uses VERIFIED expert actions in this batch.
+    Never enable it on mixed/random replay. The joint optimizer must contain
+    exactly all WM parameters and Actor parameters, never either Critic.
     """
+    if imitation_actor is not None and getattr(imitation_actor, "control_state_source", "observed") == "predicted":
+        raise ValueError("Joint WM imitation with predicted control is not implemented; use frozen predicted-state BC")
     enc = models["encoder"]
     rssm = models["rssm"]
     dec = models["decoder"]
@@ -47,10 +57,41 @@ def train_world_model_step(
     free_nats = float(train_cfg.get("free_nats", 0.1))
     kl_balance = float(train_cfg.get("kl_balance", 0.8))
     grad_clip = float(train_cfg.get("grad_clip", 1000.0))
+    # Defaults preserve existing checkpoints/configs; explicit scales allow
+    # controlled reconstruction-vs-dynamics ablations without changing shapes.
+    state_reconstruction_scale = float(train_cfg.get("state_reconstruction_scale", 1.0))
+    image_reconstruction_scale = float(train_cfg.get("image_reconstruction_scale", 1.0))
+    if not math.isfinite(state_reconstruction_scale) or state_reconstruction_scale <= 0:
+        raise ValueError("state_reconstruction_scale must be finite and positive")
+    if not math.isfinite(image_reconstruction_scale) or image_reconstruction_scale <= 0:
+        raise ValueError("image_reconstruction_scale must be finite and positive")
 
     image = batch["image"]
     state = batch["state"]
+    state_weights = train_cfg.get("state_reconstruction_weights")
+    if state_weights is not None:
+        state_weights = torch.as_tensor(state_weights, dtype=state.dtype, device=state.device)
+        if (
+            state_weights.ndim != 1
+            or state_weights.numel() != state.shape[-1]
+            or not torch.isfinite(state_weights).all()
+            or (state_weights <= 0).any()
+        ):
+            raise ValueError("state_reconstruction_weights must have one finite positive value per state field")
     action = batch["action"]
+    if not math.isfinite(imitation_weight) or imitation_weight < 0:
+        raise ValueError("imitation_weight must be finite and nonnegative")
+    if (imitation_actor is None) != (imitation_weight == 0):
+        raise ValueError("imitation_actor and a positive imitation_weight must be supplied together")
+    actor_parameters = []
+    if imitation_actor is not None:
+        if not torch.isfinite(action).all() or ((action < -1) | (action > 1)).any():
+            raise ValueError("Joint imitation requires finite bounded expert actions")
+        actor_parameters = list(imitation_actor.parameters())
+        expected = {id(p) for m in models.values() for p in m.parameters()} | {id(p) for p in actor_parameters}
+        actual = [id(p) for group in optimizer.param_groups for p in group["params"]]
+        if len(actual) != len(set(actual)) or set(actual) != expected:
+            raise ValueError("Joint optimizer must contain exactly World Model and Actor parameters")
     reward = batch["reward"]
     terminal = batch.get("terminated", batch["done"]).float()
     is_first = batch["is_first"].float() if "is_first" in batch else None
@@ -103,6 +144,11 @@ def train_world_model_step(
 
     loss_recon_img = F.mse_loss(recon_image, image)
     loss_recon_state = F.mse_loss(recon_state, state)
+    # Optional fixed training-set weights can prevent low-variance but useful
+    # fields from being ignored. Never estimate these from validation episodes.
+    loss_recon_state_weighted = loss_recon_state if state_weights is None else (
+        (recon_state - state).square() * state_weights
+    ).mean()
     sym_reward = torch.sign(reward) * torch.log1p(torch.abs(reward))
     # Weight negative rewards (crashes) by 5.0x to prevent smoothing away penalties
     rew_weight = torch.where(sym_reward < 0.0, float(train_cfg.get("negative_reward_weight", 5.0)), 1.0)
@@ -125,12 +171,19 @@ def train_world_model_step(
     # kl_balance weights dynamics (prior learning), not the representation term.
     loss_kl = kl_balance * kl_prior_post + (1.0 - kl_balance) * kl_post_prior
 
+    loss_imitation = torch.zeros((), device=device)
+    if imitation_actor is not None:
+        control_kwargs = {"control_state": _flatten_time(state)} if getattr(imitation_actor, "control_state_dim", 0) else {}
+        predicted_action = imitation_actor(h_flat, z_flat, deterministic=True, **control_kwargs).mean
+        loss_imitation = F.mse_loss(predicted_action, _flatten_time(action))
+
     loss = (
-        loss_recon_img
-        + loss_recon_state
+        image_reconstruction_scale * loss_recon_img
+        + state_reconstruction_scale * loss_recon_state_weighted
         + loss_reward
         + loss_continue
         + loss_kl
+        + imitation_weight * loss_imitation
     )
 
     optimizer.zero_grad(set_to_none=True)
@@ -140,12 +193,19 @@ def train_world_model_step(
         grad_clip,
         error_if_nonfinite=True,
     )
+    if actor_parameters:
+        torch.nn.utils.clip_grad_norm_(actor_parameters, 10.0, error_if_nonfinite=True)
     optimizer.step()
 
     return {
         "loss": float(loss.detach()),
         "loss_recon_img": float(loss_recon_img.detach()),
+        "loss_recon_img_scaled": float((image_reconstruction_scale * loss_recon_img).detach()),
         "loss_recon_state": float(loss_recon_state.detach()),
+        "loss_recon_state_weighted": float(loss_recon_state_weighted.detach()),
+        "loss_recon_state_scaled": float((state_reconstruction_scale * loss_recon_state_weighted).detach()),
+        "loss_imitation": float(loss_imitation.detach()),
+        "loss_imitation_scaled": float((imitation_weight * loss_imitation).detach()),
         "loss_reward": float(loss_reward.detach()),
         "loss_continue": float(loss_continue.detach()),
         "loss_kl": float(loss_kl.detach()),

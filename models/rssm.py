@@ -124,13 +124,15 @@ class RSSM(nn.Module):
         self,
         prev_state: dict[str, torch.Tensor],
         action: torch.Tensor,
+        *,
+        deterministic: bool = False,
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """
         Prior step (no observation) — used for imagination / ẑ_t.
         """
         h = self._deter_step(prev_state, action)
         prior_logits = self._logits_to_grouped(self.prior_net(h))
-        z_hat = sample_categorical(prior_logits)
+        z_hat = sample_categorical(prior_logits, deterministic=deterministic)
         state = {"h": h, "z": z_hat}
         stats = {"prior_logits": prior_logits}
         return state, stats

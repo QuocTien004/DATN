@@ -143,6 +143,7 @@ def main() -> None:
         stoch_size=rssm.stoch_size,
         action_dim=buffer.action_dim,
     ).to(device)
+    actor_critic.require_imagination_ready()
     actor_optimizer = torch.optim.Adam(
         actor_critic.actor.parameters(), lr=float(ac_cfg.get("actor_lr", 8e-5))
     )
