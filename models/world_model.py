@@ -24,6 +24,9 @@ def build_world_model(
     """Build World Model components with the repository's shared dimensions."""
     encoder = Encoder(wm_cfg, state_dim=state_dim, image_shape=image_shape).to(device)
     rssm = RSSM(wm_cfg, embed_dim=encoder.embed_dim, action_dim=action_dim).to(device)
+    head_c_dim = int(wm_cfg.get('predictors', {}).get('continuous_state_dim', 0))
+    if head_c_dim and (rssm.continuous is None or head_c_dim != rssm.continuous.dim):
+        raise ValueError('Predictor continuous_state_dim must match the learned RSSM branch')
     models: dict[str, nn.Module] = {"encoder": encoder, "rssm": rssm}
     if include_decoder:
         models["decoder"] = Decoder(

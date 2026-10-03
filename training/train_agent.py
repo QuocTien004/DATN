@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from models.actor_critic import ActorCritic
 from models.control_state import with_predicted_control
 from models.continuous_state import with_continuous_control
+from models.predictors import predict_from_state
 
 
 LatentState = dict[str, torch.Tensor]
@@ -206,11 +207,9 @@ def imagine_rollout(
                           with_predicted_control(next_state, world_model["control_state"]))
             all_control.append(next_state["control"])
         # Single-step reward capped at ~25.0 (ln(26) = 3.26)
-        reward_sym = reward_predictor(next_state["h"], next_state["z"]).squeeze(-1)
+        reward_sym = predict_from_state(reward_predictor, next_state).squeeze(-1)
         reward = symexp(reward_sym, max_val=3.26)
-        continue_logit = continue_predictor(
-            next_state["h"], next_state["z"]
-        ).squeeze(-1)
+        continue_logit = predict_from_state(continue_predictor, next_state).squeeze(-1)
         discount = gamma * torch.sigmoid(continue_logit)
 
         actions.append(policy.action)
