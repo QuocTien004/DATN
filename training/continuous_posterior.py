@@ -48,6 +48,11 @@ def frozen_actor_replay_loss(actor, branch, prediction, reference_c, h, z, repla
     no_grad around the student Actor would silently disable this objective.
     This is not an off-BC action target and never invokes a Critic or prior.
     """
+    return frozen_actor_replay_mse(actor, branch, prediction, reference_c, h, z, replay_mask).mean()
+
+
+def frozen_actor_replay_mse(actor, branch, prediction, reference_c, h, z, replay_mask):
+    """Per-axis clean action MSE; same detached teacher as the legacy anchor."""
     if any(p.requires_grad for p in actor.parameters()) or actor.training:
         raise ValueError('Action replay requires an eval-mode frozen Actor')
     if prediction.shape != reference_c.shape or prediction.ndim != 2:
@@ -61,12 +66,44 @@ def frozen_actor_replay_loss(actor, branch, prediction, reference_c, h, z, repla
     with torch.no_grad():
         teacher = actor(hd, zd, control_state=branch.decode(reference_c[q].detach()), deterministic=True).action
     student = actor(hd, zd, control_state=branch.decode(prediction[q]), deterministic=True).action
-    return (student - teacher).square().mean()
+    return (student - teacher).square().mean(dim=0)
+
+
+def separate_replay_constraints(actor, branch, prediction, reference_c, target_state,
+                                h, z, replay_mask, limits):
+    """Soft, non-compensating clean constraints for steer/throttle and memory 5/6.
+
+    limits are positive physical-coordinate MSE budgets, fixed from TRAIN before
+    fitting. A satisfied axis cannot compensate for another axis above budget.
+    This minibatch penalty is not a hard feasibility guarantee or a gate pass.
+    No action preservation or extra memory penalty is applied on off-BC rows.
+    """
+    bounds = torch.as_tensor(limits, dtype=prediction.dtype, device=prediction.device).detach()
+    if bounds.shape != (4,) or not torch.isfinite(bounds).all() or (bounds <= 0).any():
+        raise ValueError('Four positive finite train-derived MSE limits required')
+    if prediction.ndim != 2 or prediction.shape[1] < 7 or target_state.shape != prediction.shape:
+        raise ValueError('State must include memory indices 5/6 and match posterior shape')
+    amse = frozen_actor_replay_mse(actor, branch, prediction, reference_c, h, z, replay_mask)
+    if amse.shape != (2,):
+        raise ValueError('Separate constraints require steering and throttle actions')
+    target = target_state[replay_mask, 5:7].detach()
+    if not torch.isfinite(target).all():
+        raise ValueError('Clean memory targets must be finite')
+    memory = branch.decode(prediction[replay_mask])[:, 5:7]
+    mmse = (memory - target).square().mean(dim=0)
+    errors = torch.cat([amse, mmse])
+    ratios = errors / bounds
+    penalty = torch.relu(ratios - 1).square().sum()
+    names = ('steering', 'throttle', 'memory5', 'memory6')
+    metrics = {f'clean_{name}_mse': errors[i].detach() for i, name in enumerate(names)}
+    metrics.update({f'clean_{name}_budget_ratio': ratios[i].detach() for i, name in enumerate(names)})
+    return penalty, metrics
 
 
 def train_continuous_posterior_step(world_model, optimizer, observation_state, reference_c, replay_mask,
                                     *, anchor_weight=1., grad_clip=10., frozen_actor=None,
-                                    latent_h=None, latent_z=None, action_weight=0.):
+                                    latent_h=None, latent_z=None, action_weight=0.,
+                                    separate_limits=None, separate_weight=0.):
     """Only encoder.control_embedding and branch.posterior may enter optimizer."""
     encoder = world_model['encoder']; branch = world_model['rssm'].continuous
     if branch is None or encoder.control_embedding is None:
@@ -79,9 +116,16 @@ def train_continuous_posterior_step(world_model, optimizer, observation_state, r
         raise ValueError('Invalid observations or gradient clip')
     if not math.isfinite(action_weight) or action_weight < 0:
         raise ValueError('Invalid action preservation weight')
-    if action_weight and (frozen_actor is None or latent_h is None or latent_z is None):
+    if not math.isfinite(separate_weight) or separate_weight < 0:
+        raise ValueError('Invalid separate constraint weight')
+    if (separate_limits is None) != (separate_weight == 0):
+        raise ValueError('Separate limits and positive weight must be supplied together')
+    if separate_weight and action_weight:
+        raise ValueError('Use either legacy action anchor or separate constraints, not both')
+    use_actor = bool(action_weight or separate_weight)
+    if use_actor and (frozen_actor is None or latent_h is None or latent_z is None):
         raise ValueError('Action preservation requires frozen Actor and cached h/z')
-    roots = list(world_model.values()) + ([frozen_actor] if action_weight else [])
+    roots = list(world_model.values()) + ([frozen_actor] if use_actor else [])
     params = [(p, p.requires_grad) for m in roots for p in m.parameters()]
     modes = {m: m.training for root in roots for m in root.modules()}
     try:
@@ -95,6 +139,11 @@ def train_continuous_posterior_step(world_model, optimizer, observation_state, r
                                                    latent_h, latent_z, replay_mask)
             loss = loss + action_weight * action_loss
             metrics['clean_action_mse'] = action_loss.detach()
+        if separate_weight:
+            penalty, extra = separate_replay_constraints(frozen_actor, branch, prediction, reference_c,
+                observation_state, latent_h, latent_z, replay_mask, separate_limits)
+            loss = loss + separate_weight * penalty
+            metrics.update(extra, separate_penalty=penalty.detach())
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         norm = torch.nn.utils.clip_grad_norm_(allowed, grad_clip, error_if_nonfinite=True)
