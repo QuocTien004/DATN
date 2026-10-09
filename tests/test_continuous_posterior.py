@@ -3,7 +3,8 @@ import unittest
 from unittest.mock import patch
 import torch
 from models.world_model import build_world_model
-from training.continuous_posterior import control_posterior, posterior_replay_loss, train_continuous_posterior_step
+from training.continuous_posterior import control_posterior, posterior_replay_loss, train_continuous_posterior_step, frozen_actor_replay_loss
+from models.actor_critic import Actor
 
 
 class ContinuousPosteriorTests(unittest.TestCase):
@@ -67,6 +68,52 @@ class ContinuousPosteriorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'exactly the separate'):
             train_continuous_posterior_step(self.wm,self.opt,self.x,self.reference,self.mask)
         self.assertEqual(flags,[p.requires_grad for m in self.wm.values() for p in m.parameters()])
+
+    def action_fixture(self):
+        actor=Actor(dict(control_state_dim=3,control_state_source='continuous',control_state_mean=[0.]*3,
+                         control_state_std=[1.]*3,actor_hidden=[8]),4,4,2)
+        return actor,torch.randn(4,4,requires_grad=True),torch.randn(4,2,2,requires_grad=True)
+
+    def test_action_loss_backpropagates_only_clean_student_not_teacher_or_actor(self):
+        actor,h,z=self.action_fixture();actor.eval().requires_grad_(False)
+        p=torch.randn(4,3,requires_grad=True);ref=self.reference.clone().requires_grad_()
+        loss=frozen_actor_replay_loss(actor,self.b,p,ref,h,z,self.mask);loss.backward()
+        self.assertGreater(float(p.grad[self.mask].abs().sum()),0.)
+        self.assertEqual(float(p.grad[~self.mask].abs().sum()),0.)
+        self.assertIsNone(ref.grad);self.assertIsNone(h.grad);self.assertIsNone(z.grad)
+        self.assertTrue(all(a.grad is None for a in actor.parameters()))
+
+    def test_action_loss_ignores_offbc_and_zero_for_equal_control(self):
+        actor,h,z=self.action_fixture();actor.eval().requires_grad_(False)
+        p=self.reference.clone();ref=p.clone()
+        p[~self.mask]=float('nan');ref[~self.mask]=float('nan');h.data[~self.mask]=float('nan')
+        self.assertEqual(float(frozen_actor_replay_loss(actor,self.b,p,ref,h,z,self.mask)),0.)
+
+    def test_action_step_keeps_actor_prior_frozen_and_restores_flags(self):
+        actor,h,z=self.action_fixture();before=copy.deepcopy(actor.state_dict());prior=copy.deepcopy(self.b.transition.state_dict())
+        out=train_continuous_posterior_step(self.wm,self.opt,self.x,self.reference,self.mask,
+            frozen_actor=actor,latent_h=h,latent_z=z,action_weight=1.)
+        self.assertIn('clean_action_mse',out);self.assertTrue(actor.training)
+        self.assertTrue(all(p.requires_grad and p.grad is None for p in actor.parameters()))
+        for k,v in actor.state_dict().items():torch.testing.assert_close(v,before[k],rtol=0,atol=0)
+        for k,v in self.b.transition.state_dict().items():torch.testing.assert_close(v,prior[k],rtol=0,atol=0)
+
+    def test_action_weight_and_missing_inputs_rejected(self):
+        for weight in [-1.,float('nan'),1.]:
+            with self.assertRaises(ValueError):
+                train_continuous_posterior_step(self.wm,self.opt,self.x,self.reference,self.mask,action_weight=weight)
+
+    def test_action_loss_refuses_trainable_actor(self):
+        actor,h,z=self.action_fixture()
+        with self.assertRaisesRegex(ValueError,'frozen Actor'):
+            frozen_actor_replay_loss(actor,self.b,self.x,self.reference,h,z,self.mask)
+
+    def test_action_error_restores_actor_flags(self):
+        actor,h,z=self.action_fixture()
+        with self.assertRaises(ValueError):
+            train_continuous_posterior_step(self.wm,self.opt,self.x,self.reference,self.mask,
+                frozen_actor=actor,latent_h=h[:2],latent_z=z,action_weight=1.)
+        self.assertTrue(actor.training);self.assertTrue(all(p.requires_grad for p in actor.parameters()))
 
 
 if __name__=='__main__':unittest.main()

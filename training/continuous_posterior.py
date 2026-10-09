@@ -41,8 +41,32 @@ def posterior_replay_loss(branch, prediction, target_state, reference_c, replay_
     return supervised + anchor_weight * anchor, {'state_mse': supervised.detach(), 'replay_anchor_mse': anchor.detach()}
 
 
+def frozen_actor_replay_loss(actor, branch, prediction, reference_c, h, z, replay_mask):
+    """Preserve deterministic actions ONLY on clean replay, through a frozen Actor.
+
+    Teacher c and cached h/z are detached. Student c must retain its graph: using
+    no_grad around the student Actor would silently disable this objective.
+    This is not an off-BC action target and never invokes a Critic or prior.
+    """
+    if any(p.requires_grad for p in actor.parameters()) or actor.training:
+        raise ValueError('Action replay requires an eval-mode frozen Actor')
+    if prediction.shape != reference_c.shape or prediction.ndim != 2:
+        raise ValueError('Matching posterior/reference matrices required')
+    if replay_mask.shape != (len(prediction),) or replay_mask.dtype != torch.bool or not replay_mask.any():
+        raise ValueError('Clean replay mask required for action preservation')
+    if h.shape[0] != len(prediction) or z.shape[0] != len(prediction):
+        raise ValueError('Cached h/z must align with posterior nodes')
+    q = replay_mask
+    hd, zd = h[q].detach(), z[q].detach()
+    with torch.no_grad():
+        teacher = actor(hd, zd, control_state=branch.decode(reference_c[q].detach()), deterministic=True).action
+    student = actor(hd, zd, control_state=branch.decode(prediction[q]), deterministic=True).action
+    return (student - teacher).square().mean()
+
+
 def train_continuous_posterior_step(world_model, optimizer, observation_state, reference_c, replay_mask,
-                                    *, anchor_weight=1., grad_clip=10.):
+                                    *, anchor_weight=1., grad_clip=10., frozen_actor=None,
+                                    latent_h=None, latent_z=None, action_weight=0.):
     """Only encoder.control_embedding and branch.posterior may enter optimizer."""
     encoder = world_model['encoder']; branch = world_model['rssm'].continuous
     if branch is None or encoder.control_embedding is None:
@@ -53,14 +77,24 @@ def train_continuous_posterior_step(world_model, optimizer, observation_state, r
         raise ValueError('Optimizer must contain exactly control embedding and posterior; prior is frozen')
     if not math.isfinite(grad_clip) or grad_clip <= 0 or not torch.isfinite(observation_state).all():
         raise ValueError('Invalid observations or gradient clip')
-    params = [(p, p.requires_grad) for m in world_model.values() for p in m.parameters()]
-    modes = {m: m.training for root in world_model.values() for m in root.modules()}
+    if not math.isfinite(action_weight) or action_weight < 0:
+        raise ValueError('Invalid action preservation weight')
+    if action_weight and (frozen_actor is None or latent_h is None or latent_z is None):
+        raise ValueError('Action preservation requires frozen Actor and cached h/z')
+    roots = list(world_model.values()) + ([frozen_actor] if action_weight else [])
+    params = [(p, p.requires_grad) for m in roots for p in m.parameters()]
+    modes = {m: m.training for root in roots for m in root.modules()}
     try:
-        for m in world_model.values(): m.eval().requires_grad_(False)
+        for m in roots: m.eval().requires_grad_(False)
         for p in allowed: p.requires_grad_(True)
         prediction = control_posterior(encoder, branch, observation_state.detach())
         loss, metrics = posterior_replay_loss(branch, prediction, observation_state, reference_c, replay_mask,
                                               anchor_weight=anchor_weight)
+        if action_weight:
+            action_loss = frozen_actor_replay_loss(frozen_actor, branch, prediction, reference_c,
+                                                   latent_h, latent_z, replay_mask)
+            loss = loss + action_weight * action_loss
+            metrics['clean_action_mse'] = action_loss.detach()
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         norm = torch.nn.utils.clip_grad_norm_(allowed, grad_clip, error_if_nonfinite=True)
