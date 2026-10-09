@@ -1,10 +1,60 @@
-| # | Test | Ý nghĩa |
-|---|---|---|
-| 1 | `test_actor_and_critic_shapes_ranges_and_finiteness` | Kiểm tra Actor nhận latent `h/z`, trả action 2 chiều, `log_prob`, entropy đúng shape; action hữu hạn và nằm trong `[-1,1]`. Critic phải trả đúng một scalar cho mỗi sample. Gọi deterministic hai lần phải cho cùng action. |
-| 2 | `test_lambda_return_hand_computed_case` | Dùng ví dụ 2 bước có thể tính tay để kiểm tra công thức λ-return, discount, bootstrap và chiều thời gian. Expected target chính xác là `[2.75, 4.0]`. |
-| 3 | `test_imagination_and_update_change_only_actor_critic` | Rollout qua fake World Model trong 3 bước, kiểm tra toàn bộ time dimension. Sau một update, tham số Actor và Critic phải đổi, mọi metric phải finite, còn tham số World Model phải giữ nguyên tuyệt đối. Đây là test quan trọng nhất về freeze và gradient. |
-| 4 | `test_real_rssm_imagination_smoke` | Thay fake dynamics bằng RSSM, RewardPredictor và ContinuePredictor thật nhưng kích thước nhỏ. Xác minh Actor-Critic thực sự tương thích với GRU/categorical latent của repo. |
-| 5 | `test_posterior_start_state_extraction` | Đưa sequence ảnh/state/action qua Encoder + `RSSM.observe_step`, lấy posterior làm điểm bắt đầu imagination. Kiểm tra subsample đúng 4 state, shape `h/z` đúng và kết quả đã detach. |
-| 6 | `test_evaluate_policy_resets_state_and_aggregates_returns` | Dùng environment giả gồm 3 episode. Kiểm tra recurrent policy được reset đúng 3 lần và success/crash/return/episode length được tổng hợp chính xác. |
-| 7 | `test_latent_policy_observation_to_action_smoke` | Chạy đường đi gần evaluation thật: raw ảnh HWC + state vector → Encoder → RSSM posterior → deterministic Actor → NumPy action. Kiểm tra action finite, đúng shape/range và sau reset thì observation đầu tiên sinh lại đúng action cũ. |
-| 8 | `test_one_offline_update_and_checkpoint` | Tạo replay buffer nhỏ, World Model thật kích thước nhỏ và chạy `Trainer.fit()` một update CPU. Kiểm tra metrics finite, `latest.pt` được tạo, load đọc được, `step=1` và có Actor-Critic state dict. |
+# Kiểm thử, tái lập và bàn giao
+
+## Chạy tests
+
+```bash
+python -m unittest discover -s tests -v
+python -m unittest discover -s tests -p 'test_continuous_posterior.py' -v
+```
+
+Chạy từ root trong môi trường đủ dependency. Suite hiện nhiều hơn bộ 8 smoke
+tests ban đầu; không lấy số test lịch sử làm số test của HEAD.
+
+| Nhóm test | Ý nghĩa |
+|---|---|
+| test_actor_critic, test_trainer | Range/action, lambda-return, freeze, checkpoint |
+| test_evaluation | Reset recurrent và aggregate/per-episode |
+| test_training_regressions | Timing, reset, terminal, replay/resume, số học |
+| test_world_model_arch, test_world_model_loss_scales | Shape và loss WM |
+| test_imitation, test_joint_world_model | BC optimizer scope, provenance, joint opt-in |
+| test_control_bridge, test_control_prediction | Control source, GT guard, predicted state |
+| test_continuous_state, test_continuous_transition | c, không GT tương lai, rollout mask |
+| test_continuous_posterior | Chỉ posterior/embedding đổi, clean-only action gradient |
+| test_separate_replay | Budget riêng từng action/memory, không bù trừ giữa tọa độ, frozen scope |
+| test_control_predictors, test_reward_diagnostics | Heads h/z+c, metric terminal/reward |
+
+Tên trên tương ứng file `tests/<tên>.py`. Test tensor nhỏ pass không chứng minh
+policy lái tốt. Smoke environment kiểm camera/step/load bằng horizon ngắn;
+benchmark cần horizon đầy đủ.
+
+## Tái lập
+
+Trước run ghi commit + source diff/hash; SHA-256 checkpoint/data; config resolve;
+dependency versions; seed model/sampler/environment/noise; renderer và posterior
+sampled/deterministic; updates, batch, horizon. Giữ train/validation/test/
+confirmation riêng. Chuẩn hóa và trọng số chỉ lấy từ train; không chọn model
+tốt nhất trên test rồi gọi đó là generalization.
+
+Chốt giả thuyết, đối chứng, metric, gate, early-stop trước ablation. Chỉ thay một
+thành phần. Kiểm optimizer scope và so weights đóng băng bằng giá trị.
+
+Sau run kiểm completed/results/gate/checksum; console “done” không đủ.
+Lưu trajectory khi cần; phân biệt bc_action với executed_action.
+Không chạy lại job đã hoàn tất chỉ vì mất console.
+
+## Metric và độ biến động
+
+- State MSE/RMSE: nêu tọa độ observation hay normalized c; tách heading/memory.
+- Action: tách steering/ga-phanh; nêu so expert hay Actor baseline.
+- Prior: H1/H5/H15, hold, drift; không teacher-force.
+- BC: route, finish, out/crash/timeout từng map/mode, không chỉ mean.
+- A/A: lặp cùng baseline/runtime/seed. Sai khác pixel nhỏ có thể lớn dần theo
+  vòng kín; không quy hết cho model, cũng không lấy noise để bỏ gate.
+
+## Bàn giao
+
+Không nạp checkpoint pickle không tin cậy. Không ghi đè baseline. Model/replay
+cùng mốc; lưu source/config, metric, checkpoint, trajectory, manifest trước
+khi tắt runtime tạm thời. Chỉ quảng bá candidate sau gate.
+Public docs không chứa credential, định danh cá nhân, liên kết artifact riêng
+hoặc log chưa rà soát.

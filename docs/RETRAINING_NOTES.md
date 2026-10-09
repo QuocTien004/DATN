@@ -1,67 +1,49 @@
-# Thay đổi phục vụ train lại — 2026-09-24
+# Lịch sử sửa lỗi và migration
 
-Đây là lịch sử bản v2. Kết quả train v2 50k và thay đổi tiếp theo ngày 25/09 ở
-[PILOT_REVIEW_20260925.md](PILOT_REVIEW_20260925.md). Thư mục Drive cũ bên dưới
-đã được nhóm chuyển vào `DoAn/Br_Bao/smoke/`; link vẫn giữ nguyên.
+Ghi chú còn giá trị kỹ thuật, không phải hướng dẫn resume RL.
+Trạng thái hiện tại xem [gate](PILOT_REVIEW_20260925.md).
 
-## Vì sao cần sửa trước khi tăng số bước
+## Transition contract v2
 
-Log lượt cũ dừng ở 403k; checkpoint mới được chia sẻ là 400k. Trong log, cả 40 lần
-eval có success 0%. Ở 400k: route completion 15.20%, episode length 60.35 và
-out-of-road 100%. Không dùng loss giảm để khẳng định đã học lái.
+| Vấn đề lịch sử | Contract/code hiện tại |
+|---|---|
+| Mất reset RSSM | Truyền is_first; reset h/z/c và previous action |
+| Reward/continue lệch thời điểm | Heads học successor posterior sau executed action |
+| KL balance sai nhánh | Tách dynamics/prior và representation/posterior |
+| Timeout gộp terminal | done để reset, terminated cho target continue |
+| Replay vòng mất write pointer/mmap cũ | Giữ idx/full, rebuild mmap từ archive |
+| Tail thiếu next obs | Lưu latest next obs và terminal next obs |
+| Resume lệch model/replay | Kiểm env_steps = checkpoint_step, không fallback bootstrap |
+| Actor online eval với WM khác | Checkpoint có models dùng chính WM bên trong |
+| Eval làm lệch collector | Reset recurrent/episode counters khi collect lại |
+| Bootstrap bị ghi đè | Demo replay riêng, mix theo demo_ratio |
 
-Kiểm tra trực tiếp checkpoint trên T4 hoàn tất 4 seed 10000–10003: cả 4 out-of-road,
-không có success. Đây là subset ngắn để chẩn đoán, không thay thế eval 20 episode.
-Ga trên các seed này hầu như luôn >0.9; mean khoảng 0.964, đúng mức tanh(2) của
-mean bị clamp cứng. Lateral factor có mặt ở toàn bộ các bước đã ghi, nên giả thuyết
-lane gate bị tắt không được xác nhận trong lần test này.
+Source: [batches](../training/batches.py), [WM loss](../training/train_world_model.py),
+[replay](../utils/replay_buffer.py), [resume validation](../utils/online_state.py),
+[online trainer](../training/online_trainer.py), [eval](../scripts/eval.py).
 
-## Các sửa đổi
+Checkpoint thiếu `transition_contract: 2` có thể eval lịch sử nhưng trainer
+WM/online hiện từ chối resume theo contract mới. Replay thiếu terminated
+fallback về done không thể khôi phục timeout đã mất. Không sửa metadata
+để vượt kiểm tra.
 
-| Vấn đề | Hành vi sau sửa | Code |
-|---|---|---|
-| Batch bỏ `is_first` | Truyền reset flag đến WM và posterior start states | `training/batches.py` |
-| Reward/continue target đặt tại obs_t nhưng imagination đọc next latent | Train heads từ obs_(t+1), action_t, kể cả terminal next obs | `training/train_world_model.py` |
-| KL balance 0.8 đặt lên posterior/representation | Đặt 0.8 lên prior/dynamics, 0.2 lên representation; học cả current và successor prior | `training/train_world_model.py` |
-| `done` trộn terminal và timeout | Replay mới có `terminated` riêng; timeout reset RSSM nhưng không học như terminal thật | `utils/replay_buffer.py`, collectors |
-| Load bỏ write pointer và dùng lại mmap chỉ theo size | Giữ idx/full, unwrap khi mở rộng ring, rebuild mmap từ archive hiện tại | `utils/replay_buffer.py` |
-| Tail transition không có successor khi sample | Lưu next obs mới nhất cùng terminal next obs; bỏ sequence thiếu successor trong archive cũ | `utils/replay_buffer.py` |
-| Resume mặc định quay về bootstrap | Link replay trong checkpoint, kiểm tra replay step và checkpoint step | `utils/online_state.py`, `scripts/train_online.py` |
-| Eval riêng dùng WM offline cho Actor online | Dùng WM trong chính online checkpoint; configure seed range trước khi tạo env | `scripts/eval.py` |
-| Eval cắt episode nhưng counters còn tồn | Reset return/length/recurrent state; đánh dấu boundary khi collect lại | `training/online_trainer.py` |
-| Hard clamp làm gradient bằng 0 ngoài miền | Actor mới dùng mean tanh trơn, std sigmoid; giữ legacy transforms khi eval checkpoint cũ | `models/actor_critic.py` |
-| Bootstrap bị replay vòng ghi đè | Giữ bản bootstrap riêng và mix 25% sequences trong batch | `training/online_trainer.py` |
-| Hai nguồn exploration và throttle std lớn | Giảm std/entropy, tắt Gaussian noise cộng ngoài | `configs/train.yaml` |
-| Stage 2 khác resolution và dùng reward keys không được đọc | Đồng bộ 64×64 và schema reward đang dùng | `configs/env_stage2_dense_traffic.yaml` |
-| Khó truy nguồn experiment | Lưu config/CLI/git revision + dirty status; per-seed eval JSON | CLI train/eval |
+## Actor và số học
 
-Các lỗi code là điều đã xác minh; chúng chưa chứng minh từng lỗi đóng góp bao nhiêu
-vào failure của lượt cũ. Không khẳng định bạn đã resume sai chỉ từ đường biểu diễn.
-Muốn biết cần có lịch sử lệnh chạy/phiên Colab.
+Actor mới hỗ trợ mean tanh trơn, std sigmoid và entropy sau tanh
+(`entropy_mode: squashed`). Checkpoint legacy thiếu config được eval với
+transform legacy. Không áp setting mới âm thầm lên weights cũ.
+Đạo hàm symexp tại 0 đã sửa. Regression tests kiểm giá trị/gradient, không
+chứng minh các sửa đổi đủ để RL học lái.
 
-## Contract v2 và migration
+## Nhánh experimental sau đó
 
-Checkpoint mới có `transition_contract: 2`. Online training/resume và WM resume
-từ chối checkpoint cũ để tránh tiếp tục dùng reward/continue heads học sai căn
-thời gian. Pretrain World Model từ đầu, tạo Actor mới, giữ checkpoint cũ để eval.
-Replay bootstrap 64×64 cũ có thể đọc nhưng thiếu `terminated`; code fallback về
-`done`, không thể phân biệt timeout cũ. Recollect bằng code mới là đường chuẩn.
+- BC tách RL; kiểm provenance pure expert và bounded executed actions.
+- Bridge observed/predicted/continuous có metadata và readiness guard.
+- Continuous c có posterior/residual prior riêng, giữ đường h/z cũ.
+- Posterior replay chỉ học control embedding + posterior; clean action-anchor
+  truyền gradient qua Actor đóng băng, không neo action off-BC.
+- Heads h/z+c và Critic nhận c là opt-in, chưa qua gate toàn hệ thống.
 
-Reward coefficients vẫn giữ nguyên; thêm log base/shaping/lateral để tune dựa trên
-bằng chứng. Smooth bounds, entropy 0.003 và demo ratio 0.25 là cấu hình pilot, chưa
-được chứng minh nâng success rate. Chạy pilot nhiều seed theo
-[TRAINING_GUIDE.md](TRAINING_GUIDE.md) trước khi đầu tư train dài.
-
-## Xác minh
-
-21 tests đã pass trên CPU local và Python 3.10/Colab T4. Regression tests kiểm tra reset flag, RSSM reset isolation, successor head alignment,
-timeout target, circular replay round-trip, stale mmap, latest next observation,
-demo mixing, gradient qua smooth bounds và cặp model/replay không khớp.
-Các test nhỏ chỉ xác minh tính đúng của pipeline. Báo cáo raw kết quả GPU và log
-chẩn đoán được lưu trong [Drive: DoAn/smoke/2026-09-24_retrain_v2](https://drive.google.com/drive/folders/16-wucShQmW0T-jys5jn2J4P3M5Y2USGV);
-không đưa data/checkpoint lớn vào Git.
-
-GPU smoke dùng kiến trúc đầy đủ với dữ liệu thật: 2 WM updates; online train 8
-steps có periodic eval; resume tới 12 rồi 16 steps; eval độc lập từ online
-checkpoint. WM CLI với các flags trong guide cũng chạy được 1 update. Horizon
-smoke được rút còn 4 bước để kiểm tra tích hợp, không dùng đo success rate.
+Xem [kiến trúc](phase_c.md), [artifact](ARTIFACTS.md).
+Không resume optimizer legacy sau khi thêm module/đổi parameter list.
+Giữ baseline, đối chứng cùng input/seed/config; thay từng giả thuyết.
