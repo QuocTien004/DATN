@@ -64,3 +64,72 @@ class ContinuePredictor(nn.Module):
 
     def forward(self, h: torch.Tensor, z: torch.Tensor, *, c: torch.Tensor | None = None) -> torch.Tensor:
         return self.net(_feature(h, z, c, self.continuous_state_dim))
+
+
+class ModularBoundaryHead(nn.Module):
+    """Modular anti-forgetting Continue & Reward head combining frozen `old_hz` with P1/P2 `c`.
+
+    - Preserves `old_continue(h, z)` so visual crash and finish knowledge is never forgotten.
+    - Adds a compact physical road-boundary detector on `c` (19-D normalized state).
+    - Uses a `RewardPredictor(h, z, c)` trained on `train` for smooth driving rewards, combined with
+      a negative failure penalty when either a road-boundary violation or a negative-reward crash is detected.
+    """
+
+    def __init__(
+        self,
+        base_reward_hzc: nn.Module,
+        old_reward_hz: nn.Module,
+        old_continue_hz: nn.Module,
+        state_mean: torch.Tensor,
+        state_std: torch.Tensor,
+    ) -> None:
+        super().__init__()
+        import copy
+        self.reward_hzc = copy.deepcopy(base_reward_hzc)
+        self.old_reward = copy.deepcopy(old_reward_hz).eval().requires_grad_(False)
+        self.old_continue = copy.deepcopy(old_continue_hz).eval().requires_grad_(False)
+        self.register_buffer("state_mean", state_mean.detach().clone())
+        self.register_buffer("state_std", state_std.detach().clone())
+
+        self.alpha_heading = nn.Parameter(torch.tensor(0.16), requires_grad=False)
+        self.edge_threshold = nn.Parameter(torch.tensor(0.0725), requires_grad=False)
+        self.edge_sharpness = nn.Parameter(torch.tensor(120.0), requires_grad=False)
+
+    def _corner_clearance_and_speed(self, c: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        s = c * self.state_std + self.state_mean
+        s0, s1, s2, s3 = s[:, 0], s[:, 1], s[:, 2], s[:, 3]
+        min_edge = torch.minimum(s0, s1)
+        head_dev = (s2 - 0.5).abs()
+        corner_clearance = min_edge - self.alpha_heading * head_dev
+        return corner_clearance, s3
+
+    def forward(self, h: torch.Tensor, z: torch.Tensor, *, c: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
+        if c is None:
+            raise ValueError('ModularBoundaryHead requires c')
+        with torch.no_grad():
+            old_r = self.old_reward(h, z).squeeze(-1)
+            old_c_logit = self.old_continue(h, z).squeeze(-1)
+
+        corner_clearance, s3 = self._corner_clearance_and_speed(c)
+        # Stationary vehicles (s3 <= 0.05) cannot cross road boundaries
+        moving_mask = (s3 > 0.05).float()
+        raw_boundary_logit = self.edge_sharpness * (corner_clearance - self.edge_threshold)
+        # If stationary, force boundary continue logit to +10.0 (continue=True)
+        boundary_cont_logit = moving_mask * raw_boundary_logit + (1.0 - moving_mask) * 10.0
+
+        # Terminal if EITHER old_hz predicts terminal OR moving vehicle violates road boundary
+        cont_logit = torch.minimum(old_c_logit, boundary_cont_logit)
+
+        # Base reward from h/z/c predictor
+        if getattr(self.reward_hzc, 'continuous_state_dim', 0) > 0:
+            base_r = self.reward_hzc(h, z, c=c).squeeze(-1)
+        else:
+            base_r = self.reward_hzc(h, z).squeeze(-1)
+        
+        # If boundary violation occurs (or old_hz detects a crash with old_r < 0), ensure negative reward sign
+        is_boundary_fail = (boundary_cont_logit <= 0.0).float()
+        is_crash_fail = ((old_c_logit <= 0.0) & (old_r < 0.0)).float()
+        fail_flag = torch.maximum(is_boundary_fail, is_crash_fail)
+        rew_pred = (1.0 - fail_flag) * base_r + fail_flag * torch.minimum(base_r, torch.tensor(-0.6, device=h.device))
+        
+        return {"reward": rew_pred, "continue": cont_logit}

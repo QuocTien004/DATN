@@ -52,7 +52,13 @@ class ContinuousState(nn.Module):
             raise ValueError('Expected continuous state (B, dim)')
         if action.shape != (previous.shape[0], self.action_dim):
             raise ValueError('Expected action (B, action_dim)')
-        return previous + self.transition(torch.cat([previous, action], -1))
+        nxt = previous + self.transition(torch.cat([previous, action], -1))
+        # P2: exact physical update for memory indices 5 and 6
+        phys_56 = (action + 1.0) * 0.5
+        norm_56 = (phys_56 - self.state_mean[5:7]) / self.state_std[5:7]
+        nxt = nxt.clone()
+        nxt[:, 5:7] = norm_56
+        return nxt
 
     def decode(self, continuous: torch.Tensor) -> torch.Tensor:
         """Fixed de-normalization, not another learned decoder on h/z."""
