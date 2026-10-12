@@ -15,6 +15,14 @@ class ContinuousState(nn.Module):
         super().__init__()
         self.dim = int(cfg['dim'])
         self.action_dim = int(action_dim)
+        # Opt-in MetaDrive contract: state[t+1, 5:7] encodes executed action[t].
+        # Kept in wm_cfg (not inferred from weights), so old checkpoints retain
+        # the learned transition when the key is absent.
+        self.exact_action_memory = cfg.get('exact_action_memory', False)
+        if not isinstance(self.exact_action_memory, bool):
+            raise ValueError('exact_action_memory must be a boolean')
+        if self.exact_action_memory and (self.dim != 19 or self.action_dim != 2):
+            raise ValueError('exact_action_memory requires MetaDrive state19/action2')
         self.embed_start = int(cfg.get('embed_start', 0))
         self.embed_stop = int(cfg.get('embed_stop', embed_dim))
         if self.dim <= 0 or not 0 <= self.embed_start < self.embed_stop <= embed_dim:
@@ -52,7 +60,15 @@ class ContinuousState(nn.Module):
             raise ValueError('Expected continuous state (B, dim)')
         if action.shape != (previous.shape[0], self.action_dim):
             raise ValueError('Expected action (B, action_dim)')
-        return previous + self.transition(torch.cat([previous, action], -1))
+        if self.exact_action_memory and (
+            not torch.isfinite(action).all() or (action.abs() > 1).any()
+        ):
+            raise ValueError('Exact memory requires finite executed actions in [-1, 1]')
+        predicted = previous + self.transition(torch.cat([previous, action], -1))
+        if self.exact_action_memory:
+            memory = ((action + 1) * .5 - self.state_mean[5:7]) / self.state_std[5:7]
+            predicted = torch.cat([predicted[:, :5], memory, predicted[:, 7:]], -1)
+        return predicted
 
     def decode(self, continuous: torch.Tensor) -> torch.Tensor:
         """Fixed de-normalization, not another learned decoder on h/z."""
