@@ -22,6 +22,7 @@ tests ban đầu; không lấy số test lịch sử làm số test của HEAD.
 | test_continuous_posterior | Chỉ posterior/embedding đổi, clean-only action gradient |
 | test_separate_replay | Budget riêng từng action/memory, không bù trừ giữa tọa độ, frozen scope |
 | test_control_predictors, test_reward_diagnostics | Heads h/z+c, metric terminal/reward |
+| test_p1_p4_audit | Oracle tường minh, P2 opt-in/gradient/checkpoint, P3 shape/scale, return và guard |
 
 Tên trên tương ứng file `tests/<tên>.py`. Test tensor nhỏ pass không chứng minh
 policy lái tốt. Smoke environment kiểm camera/step/load bằng horizon ngắn;

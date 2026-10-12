@@ -82,6 +82,8 @@ override nên phải ghi lại để so sánh đúng. WM legacy resume dựng mo
 
 Các khóa opt-in: encoder.control_embedding, rssm.categorical_embed_dim,
 rssm.continuous_state, control_state_predictor, predictors.continuous_state_dim;
+`rssm.continuous_state.exact_action_memory` là ablation P2 mặc định tắt;
+phải lưu flag cùng checkpoint config, không thể suy ra từ weights.
 Actor control_state_dim/source/mean/std, Critic critic_control_state_dim.
 Xem source tương ứng và [kiến trúc](phase_c.md); không có một YAML mặc định
 bao trùm mọi nhánh experimental.

@@ -5,7 +5,7 @@ theo hướng Dreamer. Đây là implementation riêng, không phải bản tái
 DreamerV3. Input gồm RGB trước 64×64×3 và state 19 chiều; action là
 `[steering, throttle/brake]` trong `[-1,1]`.
 
-## Trạng thái ngày 09/10/2026
+## Trạng thái ngày 12/10/2026
 
 Baseline nghiên cứu đang giữ là Actor học Behavior Cloning (BC), nhận latent
 h/z và state do nhánh continuous c tạo ra. Không thay baseline bằng các refit
@@ -15,6 +15,8 @@ Prior c, tương thích Actor sau sửa posterior và reward/continue chưa đ�
 Code chạy được không có nghĩa model đã hoàn thiện. YAML mặc định vẫn là
 latent-only lịch sử, không tự tạo baseline c.
 Xem [trạng thái và giới hạn](docs/PILOT_REVIEW_20260925.md).
+Nhánh tích hợp P1–P4 giữ baseline và readiness guard; P2 chỉ opt-in,
+P1/P3 chỉ diagnostic. Xem [audit và cách tái lập](docs/P1_P4_AUDIT.md).
 
 ## Bắt đầu
 
