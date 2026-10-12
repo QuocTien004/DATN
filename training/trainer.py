@@ -31,6 +31,8 @@ class Trainer:
         global_step: int = 0,
         checkpoint_metadata: dict[str, Any] | None = None,
     ) -> None:
+        if actor_critic is not None:
+            actor_critic.require_imagination_ready()
         self.configs = configs
         self.buffer = buffer
         self.logger = logger

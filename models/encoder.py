@@ -52,6 +52,43 @@ class Encoder(nn.Module):
             in_dim = hidden
         mlp.append(nn.Linear(in_dim, self.embed_dim - half))
         self.state_mlp = nn.Sequential(*mlp)
+        self.base_embed_dim = self.embed_dim
+        control_cfg = enc_cfg.get('control_embedding')
+        self.control_embedding = None
+        if control_cfg is not None:
+            control_dim = int(control_cfg.get('dim', 64))
+            if control_dim <= 0:
+                raise ValueError('control embedding dim must be positive')
+            for name, default in [('control_mean', 0.), ('control_std', 1.)]:
+                value = torch.as_tensor(control_cfg.get(name, [default] * self.state_dim), dtype=torch.float32)
+                if value.shape != (self.state_dim,) or not torch.isfinite(value).all() or ('std' in name and (value <= 0).any()):
+                    raise ValueError(f'Invalid encoder {name}')
+                self.register_buffer(name, value.clone())
+            # A separately learned observation embedding preserves the legacy
+            # categorical input exactly while allowing control supervision to
+            # reach the encoder. Never called during an imagined prior step.
+            self.control_embedding = nn.Sequential(nn.Linear(self.state_dim, control_dim), nn.ELU())
+            self.embed_dim += control_dim
+
+    def encode_control(self, state: torch.Tensor) -> torch.Tensor:
+        if self.control_embedding is None:
+            raise ValueError('Encoder has no learned control embedding')
+        return self.control_embedding((state - self.control_mean) / self.control_std)
+
+    def warm_start_base(self, saved: dict[str, torch.Tensor]) -> None:
+        """Load exactly legacy encoder weights; new checkpoints remain strict."""
+        if self.control_embedding is None:
+            raise ValueError('Warm start requires a new control embedding')
+        expected = self.state_dict()
+        new = {k for k in expected if k.startswith('control_embedding.') or k in {'control_mean','control_std'}}
+        if set(saved) != set(expected) - new:
+            raise ValueError('Warm start must contain exactly the base encoder keys')
+        for key in saved:
+            if saved[key].shape != expected[key].shape:
+                raise ValueError(f'Encoder warm start shape mismatch: {key}')
+        result = self.load_state_dict(saved, strict=False)
+        if set(result.missing_keys) != new or result.unexpected_keys:
+            raise RuntimeError('Unexpected encoder warm start mismatch')
 
     def forward(self, image: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
         if image.dim() != 4:
@@ -63,4 +100,7 @@ class Encoder(nn.Module):
         feat = feat.reshape(feat.shape[0], -1)
         img_e = self.image_proj(feat)
         state_e = self.state_mlp(state)
-        return torch.cat([img_e, state_e], dim=-1)
+        parts = [img_e, state_e]
+        if self.control_embedding is not None:
+            parts.append(self.encode_control(state))
+        return torch.cat(parts, dim=-1)

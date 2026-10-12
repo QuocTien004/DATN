@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import os
 
 import torch
 
@@ -13,7 +14,9 @@ def save_checkpoint(
     """Save a checkpoint dict (model state, optimizer, step, ...)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(payload, path)
+    temporary = path.with_name(path.name + ".tmp")
+    torch.save(payload, temporary)
+    os.replace(temporary, path)
     return path
 
 

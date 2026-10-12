@@ -11,6 +11,10 @@ Usage
 from __future__ import annotations
 
 import argparse
+import copy
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,11 +40,13 @@ from utils.config import load_experiment_configs
 from utils.logger import Logger
 from utils.replay_buffer import ReplayBuffer
 from utils.seed import set_seed
+from utils.online_state import resolve_resume_path, resolve_replay_path, validate_replay_step, require_current_contract
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Online RL training loop")
-    p.add_argument("--config", type=str, default="configs/train.yaml")
+    p.add_argument("--config", type=str, default=None,
+                   help="Training YAML; on resume defaults to saved settings")
     p.add_argument("--env-config", type=str, default=None)
     p.add_argument("--wm-config", type=str, default=None)
     p.add_argument("--buffer", type=str, default=None,
@@ -50,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--resume", type=str, default=None,
                    help="Online checkpoint to resume from")
     p.add_argument("--ckpt-dir", type=str, default=None,
-                   help="Custom checkpoint output directory (e.g., checkpoints/exp_01)")
+                   help="Output root; online/ is appended (e.g., checkpoints/exp_01)")
     p.add_argument("--exp-name", type=str, default=None,
                    help="Custom experiment name for logging")
     p.add_argument("--total-steps", type=int, default=None)
@@ -60,8 +66,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--eval-every", type=int, default=None)
     p.add_argument("--eval-episodes", type=int, default=None)
+    p.add_argument("--eval-horizon", type=int, default=None,
+                   help="Optional eval-only time limit; bounded diagnostics are not full-policy evaluation")
     p.add_argument("--ckpt-every", type=int, default=None)
     p.add_argument("--device", type=str, default=None, help="cpu | cuda")
+    p.add_argument("--demo-buffer", type=str, default=None, help="Protected bootstrap/demo replay for mixed sampling")
+    p.add_argument("--log-dir", type=str, default=None)
+    p.add_argument("--seed", type=int, default=None)
     return p.parse_args()
 
 
@@ -75,21 +86,41 @@ def _resolve_device(name: str | None) -> torch.device:
 
 def main() -> None:
     args = parse_args()
-    configs = load_experiment_configs(args.config, args.env_config, args.wm_config)
+    configs = load_experiment_configs(args.config or "configs/train.yaml", args.env_config, args.wm_config)
+    resume_path = resolve_resume_path(args.resume) if args.resume else None
+    resume_ckpt = load_checkpoint(resume_path, map_location="cpu") if resume_path else None
+    if resume_ckpt is not None:
+        require_current_contract(resume_ckpt)
+    if resume_ckpt is not None and args.config is None:
+        configs["train"] = copy.deepcopy(resume_ckpt["train_cfg"])
     train_cfg = configs["train"]
+    if args.seed is not None:
+        train_cfg["seed"] = args.seed
     set_seed(int(train_cfg.get("seed", 0)))
     device = _resolve_device(args.device or train_cfg.get("device", "cpu"))
     paths_cfg = train_cfg.setdefault("paths", {})
     if args.ckpt_dir:
         paths_cfg["checkpoint_dir"] = args.ckpt_dir
+    if Path(paths_cfg.get("checkpoint_dir", "checkpoints")).name == "online":
+        print("[warn] --ckpt-dir is a run ROOT; script appends online/. This path will produce online/online/.", flush=True)
     if args.exp_name:
         train_cfg["experiment_name"] = args.exp_name
+    if args.log_dir:
+        paths_cfg["log_dir"] = args.log_dir
+    if resume_ckpt is not None:
+        train_cfg["actor_critic"] = resume_ckpt["actor_critic_cfg"]
+        if args.env_config is None:
+            configs["env"] = resume_ckpt["env_cfg"]
+    elif (Path(paths_cfg.get("checkpoint_dir", "checkpoints")) / "online/latest.pt").exists():
+        raise FileExistsError("Online output already exists. Use --resume or a new --ckpt-dir.")
 
     # ---- Load replay buffer ------------------------------------------------
     buffer_path = Path(
         args.buffer
         or Path(paths_cfg.get("buffer_dir", "data/replay_buffer")) / "bootstrap.npz"
     )
+    if resume_ckpt is not None:
+        buffer_path = resolve_replay_path(resume_path, resume_ckpt, args.buffer)
     if not buffer_path.exists():
         raise FileNotFoundError(
             f"Replay buffer not found: {buffer_path}\n"
@@ -97,6 +128,11 @@ def main() -> None:
         )
     print(f"[Online] Loading initial replay buffer: {buffer_path}", flush=True)
     buffer = ReplayBuffer.load(buffer_path)
+    if resume_ckpt is not None:
+        validate_replay_step(resume_ckpt, buffer.checkpoint_step)
+    expected_image = (int(configs["env"].get("image_height", 64)), int(configs["env"].get("image_width", 64)), 3)
+    if buffer.image_shape != expected_image:
+        raise ValueError(f"Environment image {expected_image} != replay {buffer.image_shape}")
 
     # Expand buffer for online data and make writable
     online_cap = int(train_cfg.get("buffer", {}).get("capacity", 25000))
@@ -108,7 +144,9 @@ def main() -> None:
     print(f"[Online] Buffer ready: {buffer.summary()}", flush=True)
 
     # ---- Load World Model checkpoint ---------------------------------------
-    if args.wm_checkpoint:
+    if resume_path is not None:
+        wm_ckpt_path = resume_path
+    elif args.wm_checkpoint:
         wm_ckpt_path = Path(args.wm_checkpoint)
     else:
         custom_wm_path = Path(paths_cfg.get("checkpoint_dir", "checkpoints")) / "world_model" / "latest.pt"
@@ -120,7 +158,8 @@ def main() -> None:
             "Run scripts/train_world_model.py first."
         )
     print(f"[Online] Loading World Model: {wm_ckpt_path}", flush=True)
-    wm_ckpt = load_checkpoint(wm_ckpt_path, map_location=device)
+    wm_ckpt = resume_ckpt if resume_ckpt is not None else load_checkpoint(wm_ckpt_path, map_location="cpu")
+    require_current_contract(wm_ckpt)
     validate_world_model_metadata(
         wm_ckpt,
         image_shape=buffer.image_shape,
@@ -128,6 +167,7 @@ def main() -> None:
         action_dim=buffer.action_dim,
     )
     wm_cfg = wm_ckpt.get("wm_cfg", configs["world_model"])
+    configs["world_model"] = wm_cfg
     world_model = build_world_model(
         wm_cfg,
         tuple(buffer.image_shape),
@@ -173,20 +213,8 @@ def main() -> None:
     # ---- Resume from online checkpoint -------------------------------------
     start_env_steps = 0
     start_episodes = 0
-    if args.resume:
-        resume_path = Path(args.resume)
-        if not resume_path.exists():
-            # Check if user omitted the /online/ subdirectory
-            alt_path = resume_path.parent / "online" / resume_path.name
-            if alt_path.exists():
-                resume_path = alt_path
-            elif resume_path.is_dir():
-                for cand in (resume_path / "online" / "latest.pt", resume_path / "latest.pt"):
-                    if cand.exists():
-                        resume_path = cand
-                        break
-
-        ckpt = load_checkpoint(resume_path, map_location=device)
+    if resume_ckpt is not None:
+        ckpt = resume_ckpt
         actor_critic.load_state_dict(ckpt["actor_critic"])
         actor_optimizer.load_state_dict(ckpt["actor_optimizer"])
         critic_optimizer.load_state_dict(ckpt["critic_optimizer"])
@@ -210,11 +238,27 @@ def main() -> None:
     eval_cfg_section = train_cfg.get("eval", {})
     eval_start_seed = int(eval_cfg_section.get("start_seed", 10000))
     eval_episodes = int(
-        args.eval_episodes or eval_cfg_section.get("num_episodes", 20)
+        args.eval_episodes if args.eval_episodes is not None else eval_cfg_section.get("num_episodes", 20)
     )
     eval_env_cfg = dict(env_cfg)
     eval_env_cfg["start_seed"] = eval_start_seed
     eval_env_cfg["num_scenarios"] = eval_episodes
+    eval_horizon = args.eval_horizon if args.eval_horizon is not None else eval_cfg_section.get("horizon")
+    if eval_horizon is not None:
+        if int(eval_horizon) <= 0:
+            raise ValueError("eval horizon must be positive")
+        eval_env_cfg["horizon"] = int(eval_horizon)
+        eval_cfg_section["horizon"] = int(eval_horizon)
+
+    demo_buffer = None
+    demo_ratio = float(train_cfg.get("buffer", {}).get("demo_ratio", 0.0))
+    if demo_ratio > 0:
+        demo_path = Path(args.demo_buffer or (buffer_path if resume_path is None else Path(paths_cfg.get("buffer_dir", "data/replay_buffer")) / "bootstrap.npz"))
+        if resume_path is not None and demo_path.resolve() == buffer_path.resolve():
+            raise ValueError("--demo-buffer must be a separate protected bootstrap replay")
+        demo_buffer = ReplayBuffer.load(demo_path)
+        validate_world_model_metadata(wm_ckpt, image_shape=demo_buffer.image_shape, state_dim=demo_buffer.state_dim, action_dim=demo_buffer.action_dim)
+        demo_buffer.sequence_length = buffer.sequence_length
 
     # ---- Create training environment ---------------------------------------
     print("[Online] Initializing MetaDrive environment...", flush=True)
@@ -241,19 +285,45 @@ def main() -> None:
         train_env=train_env,
         train_env_cfg=train_env_cfg,
         eval_env_cfg=eval_env_cfg,
+        demo_buffer=demo_buffer,
     )
     trainer.env_steps = start_env_steps
     trainer.total_episodes = start_episodes
 
     # ---- Training hyperparams (CLI overrides > YAML defaults) --------------
     online_cfg = train_cfg.get("train", {})
-    total_steps = int(args.total_steps or online_cfg.get("total_env_steps", 500_000))
-    steps_per_iter = int(args.steps_per_iter or 1000)
-    wm_updates = int(args.wm_updates or online_cfg.get("world_model_updates", 1))
-    ac_updates = int(args.ac_updates or online_cfg.get("actor_critic_updates", 1))
-    batch_size = int(args.batch_size or train_cfg.get("wm_train", {}).get("batch_size", 8))
-    eval_every = int(args.eval_every or online_cfg.get("eval_every", 10_000))
-    ckpt_every = int(args.ckpt_every or online_cfg.get("checkpoint_every", 20_000))
+    total_steps = int(args.total_steps if args.total_steps is not None else online_cfg.get("total_env_steps", 500_000))
+    steps_per_iter = int(args.steps_per_iter if args.steps_per_iter is not None else online_cfg.get("steps_per_iter", 1000))
+    wm_updates = int(args.wm_updates if args.wm_updates is not None else online_cfg.get("world_model_updates", 1))
+    ac_updates = int(args.ac_updates if args.ac_updates is not None else online_cfg.get("actor_critic_updates", 1))
+    batch_size = int(args.batch_size if args.batch_size is not None else train_cfg.get("wm_train", {}).get("batch_size", 8))
+    eval_every = int(args.eval_every if args.eval_every is not None else online_cfg.get("eval_every", 10_000))
+    ckpt_every = int(args.ckpt_every if args.ckpt_every is not None else online_cfg.get("checkpoint_every", 20_000))
+    if steps_per_iter <= 0 or batch_size <= 0 or eval_episodes <= 0 or min(wm_updates, ac_updates, total_steps, eval_every, ckpt_every) < 0:
+        raise ValueError("Invalid training counts/intervals")
+    revision = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    dirty = bool(subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True).stdout.strip())
+    # Store effective CLI overrides in checkpoints as well as a readable manifest.
+    online_cfg.update(total_env_steps=total_steps, steps_per_iter=steps_per_iter,
+                      world_model_updates=wm_updates, actor_critic_updates=ac_updates,
+                      eval_every=eval_every, checkpoint_every=ckpt_every)
+    train_cfg["train"] = online_cfg
+    train_cfg.setdefault("wm_train", {})["batch_size"] = batch_size
+    train_cfg.setdefault("eval", {})["num_episodes"] = eval_episodes
+    if eval_horizon is not None:
+        train_cfg["eval"]["horizon"] = int(eval_horizon)
+    train_cfg["device"] = str(device)
+    manifest = {"configs": configs, "args": vars(args), "git_revision": revision, "git_dirty": dirty, "transition_contract": 2,
+                "runtime": {"python": sys.version, "torch": torch.__version__, "device": str(device),
+                            "render_backend": os.environ.get("DATN_RENDER_BACKEND", "default"),
+                            "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None}}
+    manifest_path = logger.log_dir / f"run_start_{start_env_steps:06d}.json"
+    suffix = 1
+    while manifest_path.exists():
+        manifest_path = logger.log_dir / f"run_start_{start_env_steps:06d}_{suffix}.json"
+        suffix += 1
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (logger.log_dir / "resolved_config.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     print(
         f"[Online] total_steps={total_steps}, steps_per_iter={steps_per_iter}, "
@@ -277,7 +347,7 @@ def main() -> None:
             checkpoint_every=ckpt_every,
         )
     finally:
-        train_env.close()
+        trainer.train_env.close()
         logger.finish()
 
 

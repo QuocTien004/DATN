@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import os
+import tempfile
 
 import numpy as np
 
@@ -18,6 +20,7 @@ class Transition:
     done: bool
     next_image: np.ndarray  # kept in API; not duplicated in RAM storage
     next_state: np.ndarray
+    terminated: bool | None = None  # None supports legacy callers: use done.
 
 
 class ReplayBuffer:
@@ -47,7 +50,9 @@ class ReplayBuffer:
         self.actions = np.zeros((capacity, action_dim), dtype=np.float32)
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.dones = np.zeros((capacity,), dtype=np.bool_)
-        # Sparse terminal next-obs (only when done=True)
+        self.terminated = np.zeros((capacity,), dtype=np.bool_)
+        self.checkpoint_step: int | None = None
+        # Sparse terminal successors plus the latest transition's successor.
         self._term_image: dict[int, np.ndarray] = {}
         self._term_state: dict[int, np.ndarray] = {}
 
@@ -71,10 +76,16 @@ class ReplayBuffer:
         """
         old_size = len(self)
         new_cap = max(int(new_capacity or self.capacity), old_size)
+        # Unwrap oldest -> newest before expanding a full ring. Otherwise a
+        # saved write pointer in the middle becomes a false temporal adjacency.
+        order = np.arange(old_size)
+        if self.full and new_cap != self.capacity:
+            order = (order + self.idx) % old_size
+        index_map = {int(old): new for new, old in enumerate(order)}
 
         def _expand(src: np.ndarray, shape: tuple, dtype) -> np.ndarray:
             dst = np.zeros(shape, dtype=dtype)
-            dst[: src.shape[0]] = src[: src.shape[0]]
+            dst[:old_size] = src[order]
             return dst
 
         self.images = _expand(
@@ -86,15 +97,18 @@ class ReplayBuffer:
         )
         self.rewards = _expand(self.rewards, (new_cap,), np.float32)
         self.dones = _expand(self.dones, (new_cap,), np.bool_)
+        self.terminated = _expand(self.terminated, (new_cap,), np.bool_)
 
         new_ep = np.ones((new_cap,), dtype=np.bool_)
-        new_ep[:old_size] = self.episode_start[:old_size]
+        new_ep[:old_size] = self.episode_start[order]
         self.episode_start = new_ep
 
-        self.capacity = new_cap
-        if self.full:
+        if new_cap != self.capacity:
+            self._term_image = {index_map[k]: v for k, v in self._term_image.items() if k in index_map}
+            self._term_state = {index_map[k]: v for k, v in self._term_state.items() if k in index_map}
             self.idx = old_size % new_cap
             self.full = old_size >= new_cap
+        self.capacity = new_cap
         self._valid_starts_cache = None
         self._valid_starts_key = None
         self._sample_img_buf = None
@@ -104,6 +118,16 @@ class ReplayBuffer:
             del self._mmap_path
 
     def add(self, transition: Transition, *, is_first: bool = False) -> None:
+        if np.shape(transition.image) != self.image_shape:
+            raise ValueError(f"Replay image shape {np.shape(transition.image)} != {self.image_shape}")
+        if len(self):
+            previous = (self.idx - 1) % self.capacity
+            if is_first and not self.dones[previous]:
+                # Reset after eval/resume is a boundary, not a true terminal.
+                self.dones[previous] = True
+            elif not self.dones[previous]:
+                self._term_image.pop(previous, None)
+                self._term_state.pop(previous, None)
         i = self.idx
         # Overwriting a slot: drop sparse terminal cache for that index
         self._term_image.pop(i, None)
@@ -114,9 +138,10 @@ class ReplayBuffer:
         self.actions[i] = transition.action
         self.rewards[i] = transition.reward
         self.dones[i] = transition.done
-        if transition.done:
-            self._term_image[i] = np.asarray(transition.next_image, dtype=np.uint8).copy()
-            self._term_state[i] = np.asarray(transition.next_state, dtype=np.float32).copy()
+        self.terminated[i] = transition.done if transition.terminated is None else transition.terminated
+        # Keep terminal observations AND the latest successor (no following row yet).
+        self._term_image[i] = np.asarray(transition.next_image, dtype=np.uint8).copy()
+        self._term_state[i] = np.asarray(transition.next_state, dtype=np.float32).copy()
         self.episode_start[i] = is_first
 
         self.idx = (self.idx + 1) % self.capacity
@@ -158,14 +183,14 @@ class ReplayBuffer:
         return starts
 
     def _next_image_at(self, t: int) -> np.ndarray:
-        if bool(self.dones[t]):
-            return self._term_image.get(t, self.images[t])
-        return self.images[t + 1]
+        if t in self._term_image:
+            return self._term_image[t]
+        return self.images[(t + 1) % self.capacity]
 
     def _next_state_at(self, t: int) -> np.ndarray:
-        if bool(self.dones[t]):
-            return self._term_state.get(t, self.states[t])
-        return self.states[t + 1]
+        if t in self._term_state:
+            return self._term_state[t]
+        return self.states[(t + 1) % self.capacity]
 
     def sample(
         self,
@@ -175,6 +200,18 @@ class ReplayBuffer:
         term_ratio: float = 0.25,
     ) -> dict[str, np.ndarray]:
         starts = self._valid_start_indices()
+        if batch_size <= 0 or not 0 <= term_ratio <= 1:
+            raise ValueError("batch_size must be positive and term_ratio must be in [0, 1]")
+        if include_next:
+            # Old archives may omit the newest successor / terminal observations.
+            bad = np.zeros(len(self), dtype=np.int64)
+            missing = [int(i) for i in np.flatnonzero(self.dones[:len(self)]) if i not in self._term_image]
+            newest = (self.idx - 1) % self.capacity
+            if newest not in self._term_image:
+                missing.append(newest)
+            bad[missing] = 1
+            bad_prefix = np.concatenate([[0], np.cumsum(bad)])
+            starts = starts[(bad_prefix[starts + self.sequence_length] - bad_prefix[starts]) == 0]
         if len(starts) == 0:
             raise RuntimeError(
                 "Not enough contiguous sequences in buffer. Collect more data."
@@ -221,9 +258,10 @@ class ReplayBuffer:
             "action": gather(self.actions),
             "reward": gather(self.rewards),
             "done": gather(self.dones),
+            "terminated": gather(self.terminated),
             "is_first": gather(self.episode_start),
         }
-        # next_* copies many 256x256 frames; WM train does not need it
+        # WM needs successors; Actor-only posterior extraction does not.
         if include_next:
             out["next_image"] = np.stack(
                 [np.stack([self._next_image_at(s + t) for t in range(L)], axis=0) for s in chosen],
@@ -235,7 +273,7 @@ class ReplayBuffer:
             )
         return out
 
-    def save(self, path: str | Path) -> Path:
+    def save(self, path: str | Path, *, checkpoint_step: int | None = None) -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         n = len(self)
@@ -247,13 +285,15 @@ class ReplayBuffer:
             term_images = np.zeros((0, *self.image_shape), dtype=np.uint8)
             term_states = np.zeros((0, self.state_dim), dtype=np.float32)
 
+        temporary = path.with_name(path.name + ".tmp.npz")
         np.savez_compressed(
-            path,
+            temporary,
             images=self.images[:n] if not self.full else self.images,
             states=self.states[:n] if not self.full else self.states,
             actions=self.actions[:n] if not self.full else self.actions,
             rewards=self.rewards[:n] if not self.full else self.rewards,
             dones=self.dones[:n] if not self.full else self.dones,
+            terminated=self.terminated[:n] if not self.full else self.terminated,
             episode_start=self.episode_start[:n] if not self.full else self.episode_start,
             term_idx=term_idx,
             term_images=term_images,
@@ -266,13 +306,15 @@ class ReplayBuffer:
             ),
             image_shape=np.array(self.image_shape, dtype=np.int64),
             size=np.array([n], dtype=np.int64),
+            checkpoint_step=np.array([-1 if checkpoint_step is None else checkpoint_step], dtype=np.int64),
         )
+        os.replace(temporary, path)
         return path
 
     @classmethod
     def load(cls, path: str | Path) -> "ReplayBuffer":
         """
-        Load bootstrap buffer. Capacity = actual size; images live in a disk
+        Load a bootstrap or online buffer. Capacity = actual size; images live in a disk
         memmap so RAM is not filled with a second full uint8 copy.
         """
         path = Path(path)
@@ -299,26 +341,25 @@ class ReplayBuffer:
             buf.actions = np.array(data["actions"][:n], dtype=np.float32, copy=True)
             buf.rewards = np.array(data["rewards"][:n], dtype=np.float32, copy=True)
             buf.dones = np.array(data["dones"][:n], dtype=np.bool_, copy=True)
+            buf.terminated = np.array(data["terminated"][:n] if "terminated" in data else buf.dones, dtype=np.bool_, copy=True)
+            step = int(data["checkpoint_step"][0]) if "checkpoint_step" in data else -1
+            buf.checkpoint_step = None if step < 0 else step
             buf.episode_start = np.array(
                 data["episode_start"][:n], dtype=np.bool_, copy=True
             )
 
             mmap_path = path.with_name(path.stem + "_images.mmap")
-            expected = n * int(np.prod(image_shape))
-            if mmap_path.exists() and mmap_path.stat().st_size == expected:
-                buf.images = np.memmap(
-                    mmap_path, dtype=np.uint8, mode="r", shape=(n, *image_shape)
-                )
-            else:
-                mm = np.memmap(
-                    mmap_path, dtype=np.uint8, mode="w+", shape=(n, *image_shape)
-                )
-                mm[:] = imgs[:n]
-                mm.flush()
-                del mm
-                buf.images = np.memmap(
-                    mmap_path, dtype=np.uint8, mode="r", shape=(n, *image_shape)
-                )
+            # Equal file size does not imply equal data after online checkpointing.
+            # Always rebuild atomically (release existing mappings before reload
+            # on Windows, where mapped files cannot be replaced).
+            with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".mmap", delete=False) as temp:
+                temporary_map = Path(temp.name)
+            mm = np.memmap(temporary_map, dtype=np.uint8, mode="w+", shape=(n, *image_shape))
+            mm[:] = imgs[:n]
+            mm.flush()
+            del mm
+            os.replace(temporary_map, mmap_path)
+            buf.images = np.memmap(mmap_path, dtype=np.uint8, mode="r", shape=(n, *image_shape))
 
             if "term_idx" in data and len(data["term_idx"]):
                 for k, img, st in zip(
@@ -329,7 +370,8 @@ class ReplayBuffer:
                         buf._term_image[ki] = np.asarray(img, dtype=np.uint8).copy()
                         buf._term_state[ki] = np.asarray(st, dtype=np.float32).copy()
 
-            buf.idx = 0
+            saved_full = bool(data["full"][0]) if "full" in data else False
+            buf.idx = int(data["idx"][0]) % n if saved_full else 0
             buf.full = True
             buf._mmap_path = mmap_path
         return buf

@@ -57,6 +57,7 @@ def collect_steps(
                 done=done,
                 next_image=next_obs["image"],
                 next_state=next_obs["state"],
+                terminated=bool(terminated),
             ),
             is_first=is_first,
         )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+import os
+import warnings
 
 import numpy as np
 
@@ -45,9 +47,18 @@ class MetaDriveImageEnv:
         self.env_cfg = env_cfg
         self._env = None
         self._last_route_completion = 0.0
+        self._warned_lateral = False
         self._build_env()
 
     def _build_env(self) -> None:
+        backend = os.environ.get("DATN_RENDER_BACKEND", "default")
+        if backend not in {"default", "egl"}:
+            raise ValueError("DATN_RENDER_BACKEND must be default or egl")
+        if backend == "egl":
+            if self.env_cfg.get("use_render", False):
+                raise ValueError("EGL backend requires use_render=false")
+            from panda3d.core import loadPrcFileData
+            loadPrcFileData("", "load-display p3headlessgl\naux-display p3headlessgl\nsync-video false")
         try:
             from metadrive.component.sensors.rgb_camera import RGBCamera
             from metadrive.envs.metadrive_env import MetaDriveEnv
@@ -106,6 +117,8 @@ class MetaDriveImageEnv:
         self, action: np.ndarray
     ) -> tuple[dict[str, np.ndarray], float, bool, bool, dict]:
         obs, reward, terminated, truncated, info = self._env.step(action)
+        info["reward_base"] = float(reward)
+        info["lateral_available"] = False
         vehicle = getattr(self._env, "agent", None) or getattr(self._env, "current_track_vehicle", None) or getattr(self._env, "vehicle", None)
         if vehicle is not None and hasattr(vehicle, "navigation") and vehicle.navigation is not None:
             try:
@@ -117,9 +130,15 @@ class MetaDriveImageEnv:
                     lat_factor = max(0.0, 1.0 - 2.0 * abs(float(lat_now)) / max(lane_w, 1.0))
                     info["lateral_factor"] = float(lat_factor)
                     info["lateral_dist"] = float(abs(lat_now))
+                    info["lateral_available"] = True
             except Exception:
                 pass
 
+        if self.env_cfg.get("use_custom_reward", True) and not info["lateral_available"] and not self._warned_lateral:
+            warnings.warn("Lane coordinates unavailable: custom lateral reward is inactive", RuntimeWarning)
+            self._warned_lateral = True
+
+        shaped = 0.0
         if self.env_cfg.get("use_custom_reward", True):
             shaped = apply_custom_reward(
                 info,
@@ -128,6 +147,8 @@ class MetaDriveImageEnv:
             )
             if shaped != 0.0:
                 reward = float(reward) + shaped
+        info["reward_shaping"] = shaped
+        info["reward_total"] = float(reward)
         self._last_route_completion = float(info.get("route_completion", 0.0) or 0.0)
         done = bool(terminated or truncated)
         return self._format_obs(obs), float(reward), bool(terminated), bool(truncated), info

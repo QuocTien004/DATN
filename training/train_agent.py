@@ -9,6 +9,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.actor_critic import ActorCritic
+from models.control_state import with_predicted_control
+from models.continuous_state import with_continuous_control
+from models.predictors import predict_from_state
 
 
 LatentState = dict[str, torch.Tensor]
@@ -27,6 +30,7 @@ class ImaginedTrajectory:
     log_prob: torch.Tensor  # (H, B)
     entropy: torch.Tensor  # (H, B)
     std: torch.Tensor  # (H, B, action_dim)
+    control: torch.Tensor | None = None  # (H+1, B, D); predicted, never future observations
 
 
 def _unique_modules(modules: Iterable[nn.Module]) -> list[nn.Module]:
@@ -71,6 +75,8 @@ def posterior_start_states(
     world_model: dict[str, nn.Module],
     *,
     max_states: int | None = None,
+    deterministic: bool = False,
+    include_control: bool = False,
 ) -> LatentState:
     """Encode a replay sequence and return detached posterior states for imagination."""
     encoder = world_model["encoder"]
@@ -93,6 +99,7 @@ def posterior_start_states(
         zero_action = torch.zeros_like(action[:, 0])
         all_h: list[torch.Tensor] = []
         all_z: list[torch.Tensor] = []
+        all_c: list[torch.Tensor] = []
         is_first = batch.get("is_first", None)
         for time in range(sequence_length):
             first_t = is_first[:, time] if is_first is not None else None
@@ -102,25 +109,45 @@ def posterior_start_states(
                 previous_action,
                 embedding[:, time],
                 is_first=first_t,
+                deterministic=deterministic,
             )
             all_h.append(current["h"])
             all_z.append(current["z"])
+            if 'c' in current:
+                all_c.append(current['c'])
 
         h = torch.stack(all_h, dim=1).reshape(batch_size * sequence_length, -1)
         z = torch.stack(all_z, dim=1).reshape(
             batch_size * sequence_length,
             *all_z[0].shape[1:],
         )
+        control = vector.reshape(batch_size * sequence_length, -1) if include_control else None
+        if all_c:
+            # P1: skip-connection for exact gt_c instead of posterior predicted c
+            continuous = world_model["rssm"].continuous.normalize(vector.reshape(batch_size * sequence_length, -1)).detach()
+        else:
+            continuous = None
         if max_states is not None and max_states > 0 and h.shape[0] > max_states:
             indices = torch.randperm(h.shape[0], device=h.device)[:max_states]
             h, z = h[indices], z[indices]
-    return {"h": h.detach(), "z": z.detach()}
+            if control is not None:
+                control = control[indices]
+            if continuous is not None:
+                continuous = continuous[indices]
+    states = {"h": h.detach(), "z": z.detach()}
+    if control is not None:
+        states["control"] = control.detach()
+    if continuous is not None:
+        states['c'] = continuous.detach()
+    return states
 
 
 def symexp(x: torch.Tensor, max_val: float) -> torch.Tensor:
     """Invert symlog with a strict clamping ceiling to prevent numerical explosion."""
     clamped = torch.clamp(x, -max_val, max_val)
-    return torch.sign(clamped) * (torch.exp(torch.abs(clamped)) - 1.0)
+    # sign(x) * expm1(abs(x)) has autograd derivative 0 at x=0, although
+    # symexp'(0)=1. Use two smooth branches so zero-initialized values can learn.
+    return torch.where(clamped >= 0, torch.expm1(clamped), -torch.expm1(-clamped))
 
 
 def imagine_rollout(
@@ -130,8 +157,21 @@ def imagine_rollout(
     *,
     horizon: int,
     gamma: float,
+    diagnostic_control: bool = False,
 ) -> ImaginedTrajectory:
     """Roll the frozen RSSM prior forward under stochastic Actor actions."""
+    # Default production entry points retain the readiness guard. An explicit
+    # diagnostic caller may exercise the learned branch without claiming that
+    # a checkpoint is ready for unrestricted RL.
+    use_control = bool(actor_critic.actor.control_state_dim)
+    continuous_control = actor_critic.actor.control_state_source == 'continuous'
+    if diagnostic_control:
+        has_model = (getattr(world_model.get('rssm'), 'continuous', None) is not None
+                     if continuous_control else 'control_state' in world_model)
+        if not use_control or not has_model:
+            raise ValueError("diagnostic_control requires a bridge and learned control_state head")
+    else:
+        actor_critic.require_imagination_ready()
     _validate_start_states(start_states)
     if horizon <= 0:
         raise ValueError("horizon must be positive")
@@ -142,6 +182,14 @@ def imagine_rollout(
     reward_predictor = world_model["reward"]
     continue_predictor = world_model["continue"]
     current = {"h": start_states["h"], "z": start_states["z"]}
+    if getattr(rssm, 'continuous', None) is not None:
+        if 'c' not in start_states:
+            raise ValueError('Continuous RSSM imagination requires posterior c')
+        current['c'] = start_states['c']
+    if use_control:
+        current = (with_continuous_control(current, rssm) if continuous_control else
+                   with_predicted_control(current, world_model["control_state"]))
+    all_control = [current["control"]] if use_control else []
     all_h = [current["h"]]
     all_z = [current["z"]]
     actions: list[torch.Tensor] = []
@@ -158,12 +206,14 @@ def imagine_rollout(
         values.append(symexp(value_sym, max_val=6.55))
         policy = actor_critic.act(current, deterministic=False)
         next_state, _stats = rssm.imagine_step(current, policy.action)
+        if use_control:
+            next_state = (with_continuous_control(next_state, rssm) if continuous_control else
+                          with_predicted_control(next_state, world_model["control_state"]))
+            all_control.append(next_state["control"])
         # Single-step reward capped at ~25.0 (ln(26) = 3.26)
-        reward_sym = reward_predictor(next_state["h"], next_state["z"]).squeeze(-1)
+        reward_sym = predict_from_state(reward_predictor, next_state).squeeze(-1)
         reward = symexp(reward_sym, max_val=3.26)
-        continue_logit = continue_predictor(
-            next_state["h"], next_state["z"]
-        ).squeeze(-1)
+        continue_logit = predict_from_state(continue_predictor, next_state).squeeze(-1)
         discount = gamma * torch.sigmoid(continue_logit)
 
         actions.append(policy.action)
@@ -188,11 +238,14 @@ def imagine_rollout(
         log_prob=torch.stack(log_probs, dim=0),
         entropy=torch.stack(entropies, dim=0),
         std=torch.stack(stds, dim=0),
+        control=torch.stack(all_control, dim=0) if all_control else None,
     )
     for name in ("action", "reward", "discount", "value", "log_prob", "entropy", "std"):
         tensor = getattr(trajectory, name)
         if not torch.isfinite(tensor).all():
             raise FloatingPointError(f"Non-finite values in imagined {name}")
+    if trajectory.control is not None and not torch.isfinite(trajectory.control).all():
+        raise FloatingPointError("Non-finite values in imagined control")
     return trajectory
 
 
@@ -258,8 +311,17 @@ def train_actor_critic_step(
     actor_optimizer: torch.optim.Optimizer,
     critic_optimizer: torch.optim.Optimizer,
     cfg: dict[str, Any],
+    *,
+    diagnostic_control: bool = False,
 ) -> dict[str, float]:
     """Run one differentiable imagination update for Actor and Critic."""
+    if diagnostic_control:
+        if (actor_critic.actor.control_state_source != 'continuous'
+                or actor_critic.critic.control_state_dim != actor_critic.actor.control_state_dim
+                or not actor_critic.critic.control_state_dim):
+            raise ValueError('Diagnostic control RL requires continuous Actor and matching model-state Critic')
+    else:
+        actor_critic.require_imagination_ready()
     ac_cfg = cfg.get("actor_critic", cfg)
     horizon = int(ac_cfg.get("imagination_horizon", 15))
     gamma = float(ac_cfg.get("gamma", 0.997))
@@ -282,6 +344,7 @@ def train_actor_critic_step(
                 actor_critic,
                 horizon=horizon,
                 gamma=gamma,
+                diagnostic_control=diagnostic_control,
             )
             returns = lambda_return(
                 trajectory.reward,
@@ -331,12 +394,18 @@ def train_actor_critic_step(
 
         # Detaching both states and targets confines this backward pass to Critic.
         horizon_size, batch_size = trajectory.reward.shape
+        critic_kwargs = {}
+        if actor_critic.critic.control_state_dim:
+            if trajectory.control is None:
+                raise ValueError('Control Critic requires model-generated trajectory control')
+            critic_kwargs['control_state'] = trajectory.control[:-1].detach().reshape(horizon_size * batch_size, -1)
         critic_value = actor_critic.critic(
             trajectory.h[:-1].detach().reshape(horizon_size * batch_size, -1),
             trajectory.z[:-1].detach().reshape(
                 horizon_size * batch_size,
                 *trajectory.z.shape[2:],
             ),
+            **critic_kwargs,
         ).reshape(horizon_size, batch_size)
         critic_target = returns.detach()
         sym_target = torch.clamp(
@@ -362,6 +431,7 @@ def train_actor_critic_step(
         "critic_loss": float(critic_loss.detach()),
         "imagined_reward_mean": float((trajectory.reward.detach() * weights).sum() / weight_sum),
         "continue_mean": float((trajectory.discount.detach() * weights).sum() / weight_sum),
+        "continue_probability_mean": float((trajectory.discount.detach() * weights).sum() / weight_sum / gamma) if gamma > 0 else 0.0,
         "value_mean": float((trajectory.value[:-1].detach() * weights).sum() / weight_sum),
         "lambda_return_mean": float((returns.detach() * weights).sum() / weight_sum),
         "entropy": float(entropy.detach()),
