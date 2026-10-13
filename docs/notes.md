@@ -10,6 +10,13 @@ python -m unittest discover -s tests -p 'test_continuous_posterior.py' -v
 Chạy từ root trong môi trường đủ dependency. Suite hiện nhiều hơn bộ 8 smoke
 tests ban đầu; không lấy số test lịch sử làm số test của HEAD.
 
+Kiểm lại sau tích hợp P1–P4 vào Bao ngày 13/10/2026, Python 3.10 CPU:
+**127/127 regression tests pass**. Bao giữ
+readiness guard, mặc định P2 tắt và checkpoint BC bất biến. Các test oracle,
+memory timing/normalization/gradient, strict checkpoint load và guard kiểm
+correctness, không cấp quyền chạy RL. Hướng tiếp quản ở
+[Next Steps](P1_P4_AUDIT.md#next-steps--kế-hoạch-chưa-thực-hiện).
+
 | Nhóm test | Ý nghĩa |
 |---|---|
 | test_actor_critic, test_trainer | Range/action, lambda-return, freeze, checkpoint |

@@ -95,6 +95,11 @@ shaping. Không đổi reward config âm thầm khi tái dùng replay/checkpoint
 
 ## 5. Lưu/resume không mất đối chứng
 
+Checkpoint experimental RL30k đã audit là evidence suy giảm, không phải
+baseline mới hoặc đầu vào được duyệt để resume. Wrapper reward/continue
+chưa tương thích loader WM chuẩn. Giữ BC gốc và không đổi weights/config
+để ép load; xem [audit và kế hoạch bàn giao](P1_P4_AUDIT.md).
+
 Online output root tự thêm `online/`: latest.pt + online_buffer.npz.
 Checkpoint env_steps phải bằng replay checkpoint_step. Numbered checkpoint chỉ
 resume được nếu giữ replay đúng mốc; repo không giữ mọi phiên bản replay.

@@ -1,6 +1,6 @@
 # Tài liệu dự án
 
-Bắt đầu từ [README](../README.md). Đối chiếu source ngày 09/10/2026;
+Bắt đầu từ [README](../README.md). Đối chiếu source ngày 13/10/2026;
 giữ tên một số file để bảo toàn liên kết lịch sử.
 
 1. [Kiến trúc h/z/c và pipeline](phase_c.md).
@@ -9,7 +9,8 @@ giữ tên một số file để bảo toàn liên kết lịch sử.
 4. [Trạng thái, gate, nhánh experimental](PILOT_REVIEW_20260925.md).
 5. [Tests và tái lập](notes.md).
 6. [Lịch sử sửa lỗi và migration](RETRAINING_NOTES.md).
-7. [Audit P1–P4 và tích hợp opt-in](P1_P4_AUDIT.md) (11/10/2026).
+7. [Audit P1–P4, các bộ benchmark và Next Steps](P1_P4_AUDIT.md):
+   đã tích hợp vào Bao, RL vẫn khóa (13/10/2026).
 
 ## Hình lịch sử
 

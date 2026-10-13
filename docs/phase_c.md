@@ -19,6 +19,11 @@ Encoder → posterior RSSM (h,z,[c]) → Actor BC → action thật để eval
 Vector state 19 chiều do simulator cung cấp. Posterior c học từ embedding của
 vector này khi quan sát thật; không gọi hệ thống là điều khiển chỉ bằng camera.
 
+Pipeline trên đã triển khai và kiểm thử, chưa chứng nhận chất lượng RL.
+Audit P1–P4 được tích hợp vào Bao, giữ guard và BC. P2 exact action-memory
+chỉ opt-in, mặc định false; P1 GT-start là oracle. Xem
+[kết quả và Next Steps](P1_P4_AUDIT.md) trước khi refit transition.
+
 ## 2. RSSM h/z/c
 
 Recurrent State-Space Model là mô hình trạng thái có bộ nhớ.

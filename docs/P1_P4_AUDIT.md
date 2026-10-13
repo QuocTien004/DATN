@@ -1,7 +1,9 @@
 # Tích hợp có kiểm chứng P1–P4
 
-Trạng thái 12/10/2026: giữ baseline BC của Bao, **RL còn khóa**. Đây là
-nhánh tích hợp chọn lọc, không phải xác nhận toàn bộ thay đổi của Tien.
+Trạng thái 13/10/2026: audit đã tích hợp chọn lọc vào Bao qua các commit
+`c55633a` (code) và `f006355` (docs). Giữ baseline BC, **RL còn khóa**.
+P1/P2/P3 cải thiện cục bộ nhưng chưa qua gate, P4 chưa xác minh Critic.
+Chưa có kết luận P1–P4 đã sửa xong World Model.
 Không dùng kết quả GT-start để tuyên bố posterior đã dự đoán tốt.
 
 ## Những gì được giữ và giới hạn
@@ -154,3 +156,39 @@ crash2/8→4/8. Riêng hai map mới44500/44501: route69,23%→17,40%.
 seed train độc lập hoặc tỷ lệ thành công toàn bộ MetaDrive**. BC vẫn thất
 bại ở3/4map; kết quả chỉ cho thấy bản30k không bảo toàn baseline trong phép
 so này. Giữ BC và khóa RL, không lấy imagined return để phủ nhận regression.
+
+## Các kết quả dùng bộ map khác nhau
+
+| Phép đánh giá | Maps và seed | Route / finish |
+|---|---|---|
+| BC continuous lịch sử |42000–42011, hai seed train Actor 0/1, 24 lượt|82,10% / 14/24 |
+| Eval pilot RL30k |10000–10019, 20 lượt, horizon1000|28,94% / 0/20 |
+| Paired BC → RL30k |44200/44205/44500/44501, hai global RNG lặp mỗi map, 8 lượt/policy|57,24% → 18,86% / 2/8 → 0/8 |
+
+Benchmark BC lịch sử gộp hai Actor. Bộ paired dùng BC seed0 và cùng runtime,
+map/RNG cho cả hai policy; các lần lặp không phải seed train mới. Không so
+trực tiếp ba trung bình trên. Sáu eval JSON của pilot khớp metrics tương ứng.
+Log ghi thêm mốc31k, nhưng checkpoint đã audit ở30k; target config50k chưa
+chứng minh run hoàn tất. Pipeline đã có code/tests, RL vẫn chưa đạt.
+
+## Next Steps — kế hoạch chưa thực hiện
+
+1. **Ưu tiên refit riêng continuous transition cho 17 tọa độ không thuộc
+   action-memory 5/6**, bật `exact_action_memory` ngay trong quá trình train.
+   Giữ giao diện c19 của Actor và normalization. Không sửa checkpoint baseline.
+2. Giữ encoder/posterior, h/z, Actor BC, reward/continue và Critic cố định.
+   Dùng cùng dữ liệu, budget **2.000 updates**, seeds **0/1** như refit cũ;
+   đối chứng trực tiếp với refit cũ có P2 bật sau train. Không tuning test.
+3. Kiểm đầy đủ gate **H1/H5/H15**, đặc biệt lateral H5 trên off-BC ở
+   validation/test/confirmation. H5/H15 phải thắng hold và zero-change theo
+   gate đã đặt. Nếu vẫn fail cả GT-start, điều tra hệ quy chiếu làn đường
+   bằng ablation riêng, không âm thầm đổi state interface của Actor.
+4. Chỉ sau khi transition đạt gate mới sửa reward/continue, kiểm failure
+   thật và action ranking, rồi kiểm Critic riêng. Imagined return không
+   thay thế kiểm chứng reward/terminal và hành động trong môi trường.
+5. Khi các gate đạt mới mở pilot RL **tối đa 250 updates có early-stop**,
+   so trước/sau với BC cùng map/seed và dừng nếu suy giảm. **Không resume
+   RL30k hoặc train RL dài.**
+
+Các bước trên là kế hoạch bàn giao, chưa phải ablation đã chạy hay recipe
+train dài được duyệt. Mặc định `exact_action_memory=false` vẫn giữ nguyên.
