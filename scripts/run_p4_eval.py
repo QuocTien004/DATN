@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 sys.stdout.reconfigure(encoding="utf-8")
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -41,19 +41,21 @@ def construct_mlp_head(ck, with_c: bool, device, D, Z) -> torch.nn.ModuleDict:
 def main():
     parser = argparse.ArgumentParser(description="P4: Actor-Critic Imagination Test")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--refit-checkpoint", default=None, help="Path to continuous transition refit checkpoint")
     args = parser.parse_args()
 
     device = torch.device(args.device)
     p4_dir = ROOT / "logs" / "p4_eval"
     p4_dir.mkdir(parents=True, exist_ok=True)
-    p3_dir = ROOT / "logs" / "p3_eval"
-    p2_dir = ROOT / "logs" / "p2_eval"
-    data_dir = ROOT / "data" / "offbc_episodes"
+    MAIN_REPO = Path("d:/DoAnTotNghiep/worldmodel-metadrive")
+    p3_dir = (ROOT / "logs" / "p3_eval") if (ROOT / "logs" / "p3_eval").exists() else (MAIN_REPO / "logs" / "p3_eval")
+    p2_dir = (ROOT / "logs" / "p2_eval") if (ROOT / "logs" / "p2_eval").exists() else (MAIN_REPO / "logs" / "p2_eval")
+    data_dir = (ROOT / "data" / "offbc_episodes") if (ROOT / "data" / "offbc_episodes").exists() else (MAIN_REPO / "data" / "offbc_episodes")
+    ckpt_dir = (ROOT / "checkpoints" / "p0_baseline") if (ROOT / "checkpoints" / "p0_baseline").exists() else (MAIN_REPO / "checkpoints" / "p0_baseline")
     
     print(f"=== P4 Actor-Critic Imagination Test | device={device} ===")
 
     # 1. Load baseline checkpoint
-    ckpt_dir = ROOT / "checkpoints" / "p0_baseline"
     ck = load_checkpoint(ckpt_dir / "continuous_seed0_bc2000.pt", map_location="cpu")
     wm = build_world_model(ck["wm_cfg"], tuple(ck["image_shape"]), 19, 2, device, include_decoder=False)
     load_world_model_state(wm, ck)
@@ -63,8 +65,13 @@ def main():
     DIM = D + Z
 
     # Apply P2 refit
-    refit_ck = torch.load(p2_dir / "refit_seed0_2000.pt", map_location=device, weights_only=False)
+    refit_path = Path(args.refit_checkpoint) if args.refit_checkpoint else (p2_dir / "refit_seed0_2000.pt")
+    print(f"Loading refit transition: {refit_path}")
+    refit_ck = torch.load(refit_path, map_location=device, weights_only=False)
     wm["rssm"].continuous.load_state_dict(refit_ck["branch"])
+    if refit_ck.get("exact_action_memory", False):
+        wm["rssm"].continuous.exact_action_memory = True
+        print("Enabled exact_action_memory=True on continuous branch.")
     
     # Fast retrain of P3 ModularBoundaryHead to use it
     print("[Step 1/3] Re-training P3 ModularBoundaryHead base reward...")

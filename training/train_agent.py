@@ -122,11 +122,7 @@ def posterior_start_states(
             *all_z[0].shape[1:],
         )
         control = vector.reshape(batch_size * sequence_length, -1) if include_control else None
-        if all_c:
-            # P1: skip-connection for exact gt_c instead of posterior predicted c
-            continuous = world_model["rssm"].continuous.normalize(vector.reshape(batch_size * sequence_length, -1)).detach()
-        else:
-            continuous = None
+        continuous = torch.stack(all_c, dim=1).reshape(batch_size * sequence_length, -1) if all_c else None
         if max_states is not None and max_states > 0 and h.shape[0] > max_states:
             indices = torch.randperm(h.shape[0], device=h.device)[:max_states]
             h, z = h[indices], z[indices]

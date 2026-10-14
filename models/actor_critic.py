@@ -273,7 +273,8 @@ class ActorCritic(nn.Module):
         return self.actor(state["h"], state["z"], deterministic=deterministic, **kwargs)
 
     def require_imagination_ready(self) -> None:
-        pass
+        if self.actor.control_state_dim:
+            raise ValueError("BC control bridge has no validated learned control-state prior; imagination/RL is disabled")
 
     def value(self, state: dict[str, torch.Tensor]) -> torch.Tensor:
         kwargs = {'control_state': state.get('control')} if self.critic.control_state_dim else {}
