@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from evaluation.evaluate import LatentActorPolicy, evaluate_policy
+from evaluation.safety_shield import AdaptiveTrafficAvoidanceShield, SafeLatentActorPolicy
 from models.actor_critic import ActorCritic
 from models.encoder import Encoder
 from models.rssm import RSSM
@@ -138,6 +139,73 @@ class EvaluationTests(unittest.TestCase):
         repeated_first = policy(observation)
         np.testing.assert_array_equal(first, repeated_first)
 
+    def test_safety_shield_modulation(self) -> None:
+        shield = AdaptiveTrafficAvoidanceShield(
+            corridor_width=2.4, threat_distance=28.0, min_gap=5.0, desired_time_gap=1.2
+        )
+        base_act = np.array([0.0, 0.8], dtype=np.float32)
+
+        # 1. No vehicle -> untouched
+        act, diag = shield.modulate_action(base_act, None)
+        np.testing.assert_array_equal(act, base_act)
+        self.assertEqual(diag["threat_detected"], 0.0)
+
+        # 2. Mock vehicle with lidar and mock lead obstacle
+        class MockObstacle:
+            def __init__(self, pos, speed=0.0):
+                self.position = np.array(pos, dtype=np.float32)
+                self.speed_km_h = speed
+
+        class MockLidar:
+            def __init__(self, objs):
+                self.objs = objs
+            def get_surrounding_objects(self, _v):
+                return self.objs
+
+        class MockVehicle:
+            def __init__(self, objs, speed=36.0, heading=0.0):
+                self.position = np.array([0.0, 0.0], dtype=np.float32)
+                self.speed_km_h = speed
+                self.heading_theta = heading
+                self.lidar = MockLidar(objs)
+
+        # 2a. Obstacle outside corridor (dy=5.0) -> untouched
+        v_far = MockVehicle([MockObstacle([10.0, 5.0])])
+        act, diag = shield.modulate_action(base_act, v_far)
+        np.testing.assert_array_equal(act, base_act)
+
+        # 2b. Obstacle inside corridor (dx=10.0, dy=0.0), ego speed=36km/h (10m/s), desired gap = 5 + 12 = 17m
+        # Gap ratio = 10 / 17 -> progressive braking
+        v_lead = MockVehicle([MockObstacle([10.0, 0.0])])
+        act, diag = shield.modulate_action(base_act, v_lead)
+        self.assertEqual(diag["threat_detected"], 1.0)
+        self.assertLess(act[1], 0.0)
+
+        # 2c. Obstacle within emergency min gap (dx=3.0, dy=0.0) -> max decel (-1.0)
+        v_close = MockVehicle([MockObstacle([3.0, 0.0])])
+        act, diag = shield.modulate_action(base_act, v_close)
+        self.assertEqual(act[1], -1.0)
+        self.assertEqual(diag["throttle_override"], 1.0)
+
+    def test_safe_latent_actor_policy_wrapper(self) -> None:
+        policy = ResettablePolicy()
+        shield = AdaptiveTrafficAvoidanceShield()
+        safe_policy = SafeLatentActorPolicy(policy, shield=shield, env=ShortEpisodeEnv())
+        safe_policy.reset()
+        self.assertEqual(policy.resets, 1)
+        action = safe_policy({"image": np.zeros((4, 4, 3)), "state": np.zeros(2)})
+        self.assertEqual(action.shape, (2,))
+
+    def test_evaluate_policy_with_shield(self) -> None:
+        policy = ResettablePolicy()
+        shield = AdaptiveTrafficAvoidanceShield()
+        metrics = evaluate_policy(
+            ShortEpisodeEnv(), policy, num_episodes=2, start_seed=100, shield=shield
+        )
+        self.assertEqual(policy.resets, 2)
+        self.assertEqual(metrics["success_rate"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

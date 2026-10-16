@@ -77,6 +77,7 @@ def posterior_start_states(
     max_states: int | None = None,
     deterministic: bool = False,
     include_control: bool = False,
+    include_actions: bool = False,
 ) -> LatentState:
     """Encode a replay sequence and return detached posterior states for imagination."""
     encoder = world_model["encoder"]
@@ -123,6 +124,7 @@ def posterior_start_states(
         )
         control = vector.reshape(batch_size * sequence_length, -1) if include_control else None
         continuous = torch.stack(all_c, dim=1).reshape(batch_size * sequence_length, -1) if all_c else None
+        act_tensor = action.reshape(batch_size * sequence_length, -1) if include_actions else None
         if max_states is not None and max_states > 0 and h.shape[0] > max_states:
             indices = torch.randperm(h.shape[0], device=h.device)[:max_states]
             h, z = h[indices], z[indices]
@@ -130,11 +132,15 @@ def posterior_start_states(
                 control = control[indices]
             if continuous is not None:
                 continuous = continuous[indices]
+            if act_tensor is not None:
+                act_tensor = act_tensor[indices]
     states = {"h": h.detach(), "z": z.detach()}
     if control is not None:
         states["control"] = control.detach()
     if continuous is not None:
         states['c'] = continuous.detach()
+    if act_tensor is not None:
+        states["action"] = act_tensor.detach()
     return states
 
 
@@ -309,6 +315,7 @@ def train_actor_critic_step(
     cfg: dict[str, Any],
     *,
     diagnostic_control: bool = False,
+    demo_states: LatentState | None = None,
 ) -> dict[str, float]:
     """Run one differentiable imagination update for Actor and Critic."""
     if diagnostic_control:
@@ -381,6 +388,13 @@ def train_actor_critic_step(
             entropy = (weights * trajectory.entropy).sum() / weight_sum
             actor_loss = -actor_objective - entropy_scale * entropy
 
+            bc_loss = None
+            bc_scale = float(ac_cfg.get("bc_scale", 0.0))
+            if bc_scale > 0.0 and demo_states is not None and "action" in demo_states:
+                demo_policy = actor_critic.act(demo_states, deterministic=True)
+                bc_loss = F.mse_loss(demo_policy.action, demo_states["action"])
+                actor_loss = actor_loss + bc_scale * bc_loss
+
             actor_optimizer.zero_grad(set_to_none=True)
             actor_loss.backward()
             actor_grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -424,6 +438,7 @@ def train_actor_critic_step(
 
     return {
         "actor_loss": float(actor_loss.detach()),
+        "bc_loss": float(bc_loss.detach()) if bc_loss is not None else 0.0,
         "critic_loss": float(critic_loss.detach()),
         "imagined_reward_mean": float((trajectory.reward.detach() * weights).sum() / weight_sum),
         "continue_mean": float((trajectory.discount.detach() * weights).sum() / weight_sum),

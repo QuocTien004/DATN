@@ -37,6 +37,9 @@ driving_reward: 1.0
 speed_reward: 0.1
 use_lateral_reward: true
 
+# Vector state dimension (19 base kinematics + 4 obstacle features)
+state_dim: 23
+
 # Optional reward overrides (applied in envs/reward.py if enabled)
 use_custom_reward: true
 reward:

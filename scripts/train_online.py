@@ -53,6 +53,8 @@ def parse_args() -> argparse.Namespace:
                    help="Replay buffer .npz (default: data/replay_buffer/bootstrap.npz)")
     p.add_argument("--wm-checkpoint", type=str, default=None,
                    help="World Model checkpoint (default: checkpoints/world_model/latest.pt)")
+    p.add_argument("--actor-checkpoint", type=str, default=None,
+                   help="Actor-Critic checkpoint to warm-start policy (e.g., BC/warmup checkpoint)")
     p.add_argument("--resume", type=str, default=None,
                    help="Online checkpoint to resume from")
     p.add_argument("--ckpt-dir", type=str, default=None,
@@ -73,6 +75,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--demo-buffer", type=str, default=None, help="Protected bootstrap/demo replay for mixed sampling")
     p.add_argument("--log-dir", type=str, default=None)
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--safe-collect", action="store_true", help="Enable Adaptive Traffic Avoidance Shield during collection")
+    p.add_argument("--bc-scale", type=float, default=None, help="Actor BC regularizer loss weight against demo buffer")
     return p.parse_args()
 
 
@@ -113,6 +117,19 @@ def main() -> None:
             configs["env"] = resume_ckpt["env_cfg"]
     elif (Path(paths_cfg.get("checkpoint_dir", "checkpoints")) / "online/latest.pt").exists():
         raise FileExistsError("Online output already exists. Use --resume or a new --ckpt-dir.")
+
+    # ---- Load warm-start Actor-Critic checkpoint if provided ---------------
+    ac_ckpt = None
+    if args.actor_checkpoint:
+        ac_ckpt_path = Path(args.actor_checkpoint)
+        if not ac_ckpt_path.exists():
+            raise FileNotFoundError(f"Actor-Critic checkpoint not found: {ac_ckpt_path}")
+        print(f"[Online] Loading warm-start Actor-Critic checkpoint: {ac_ckpt_path}", flush=True)
+        ac_ckpt = load_checkpoint(ac_ckpt_path, map_location="cpu")
+        if resume_ckpt is None and "actor_critic_cfg" in ac_ckpt:
+            base_ac_cfg = copy.deepcopy(ac_ckpt["actor_critic_cfg"])
+            base_ac_cfg.update(train_cfg.get("actor_critic", {}))
+            train_cfg["actor_critic"] = base_ac_cfg
 
     # ---- Load replay buffer ------------------------------------------------
     buffer_path = Path(
@@ -210,7 +227,24 @@ def main() -> None:
         lr=float(ac_cfg.get("critic_lr", 8e-5)),
     )
 
-    # ---- Resume from online checkpoint -------------------------------------
+    # ---- Connect Control Bridge for Imagination if needed ------------------
+    if actor_critic.actor.control_state_dim > 0:
+        if "control_state" not in world_model and "decoder" in world_model:
+            class DecoderStatePredictor(torch.nn.Module):
+                def __init__(self, state_head: torch.nn.Module):
+                    super().__init__()
+                    self.state_head = state_head
+
+                def forward(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+                    z_flat = z.reshape(z.shape[0], -1) if z.dim() == 3 else z
+                    feat = torch.cat([h, z_flat], dim=-1)
+                    return self.state_head(feat)
+
+            world_model["control_state"] = DecoderStatePredictor(world_model["decoder"].state_head).to(device)
+            print(f"[Online] Bound DecoderStatePredictor to world_model['control_state'] (dim={actor_critic.actor.control_state_dim})", flush=True)
+        actor_critic.require_imagination_ready = lambda: None
+
+    # ---- Resume from online checkpoint or warm-start -----------------------
     start_env_steps = 0
     start_episodes = 0
     if resume_ckpt is not None:
@@ -230,6 +264,9 @@ def main() -> None:
         start_env_steps = int(ckpt.get("env_steps", 0))
         start_episodes = int(ckpt.get("total_episodes", 0))
         print(f"[Online] Resumed from {resume_path} @ env_step={start_env_steps}", flush=True)
+    elif ac_ckpt is not None and "actor_critic" in ac_ckpt:
+        print(f"[Online] Initializing Actor-Critic weights from {args.actor_checkpoint}", flush=True)
+        actor_critic.load_state_dict(ac_ckpt["actor_critic"], strict=False)
 
     # ---- Environment configs -----------------------------------------------
     env_cfg = configs["env"]
@@ -271,6 +308,11 @@ def main() -> None:
         wandb_cfg=train_cfg.get("wandb", {}),
     )
 
+    if args.bc_scale is not None:
+        train_cfg.setdefault("actor_critic", {})["bc_scale"] = float(args.bc_scale)
+    if args.safe_collect:
+        train_cfg.setdefault("train", {})["safe_collect"] = True
+
     # ---- Build OnlineTrainer and run ---------------------------------------
     trainer = OnlineTrainer(
         configs=configs,
@@ -286,6 +328,7 @@ def main() -> None:
         train_env_cfg=train_env_cfg,
         eval_env_cfg=eval_env_cfg,
         demo_buffer=demo_buffer,
+        safe_collect=bool(train_cfg.get("train", {}).get("safe_collect", False)),
     )
     trainer.env_steps = start_env_steps
     trainer.total_episodes = start_episodes

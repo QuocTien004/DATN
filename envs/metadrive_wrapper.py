@@ -92,8 +92,8 @@ class MetaDriveImageEnv:
             },
             "stack_size": int(self.env_cfg.get("stack_size", 1)),
         }
-        for k in ("driving_reward", "speed_reward", "use_lateral_reward"):
-            if k in self.env_cfg:
+        for k in ("driving_reward", "speed_reward", "use_lateral_reward", "map"):
+            if k in self.env_cfg and self.env_cfg[k] is not None:
                 config[k] = self.env_cfg[k]
         self._env = MetaDriveEnv(config)
 
@@ -153,6 +153,10 @@ class MetaDriveImageEnv:
         done = bool(terminated or truncated)
         return self._format_obs(obs), float(reward), bool(terminated), bool(truncated), info
 
+    def render(self, *args, **kwargs):
+        if self._env is not None:
+            return self._env.render(*args, **kwargs)
+
     def close(self) -> None:
         if self._env is not None:
             self._env.close()
@@ -195,14 +199,102 @@ class MetaDriveImageEnv:
                     if parts
                     else np.zeros((1,), dtype=np.float32)
                 )
+
+            target_dim = int(self.env_cfg.get("state_dim", 23))
+            if target_dim == 23 and state.shape[0] == 19:
+                c4 = self._extract_surrounding_features()
+                state = np.concatenate([state, c4], axis=0).astype(np.float32)
+
             return {"image": _to_hwc_uint8(image), "state": state}
 
         # Flat vector observation (camera off)
         flat = np.asarray(obs, dtype=np.float32).reshape(-1)
+        target_dim = int(self.env_cfg.get("state_dim", 23))
+        if target_dim == 23 and flat.shape[0] == 19:
+            c4 = self._extract_surrounding_features()
+            flat = np.concatenate([flat, c4], axis=0).astype(np.float32)
+
         h = int(self.env_cfg.get("image_height", 84))
         w = int(self.env_cfg.get("image_width", 84))
         dummy = np.zeros((h, w, 3), dtype=np.uint8)
         return {"image": dummy, "state": flat}
+
+    def _extract_surrounding_features(self) -> np.ndarray:
+        """Extract 4 dynamic obstacle features in ego frame (lead dist, rel v, lat offset, intersection threat)."""
+        vehicle = (
+            getattr(self._env, "agent", None)
+            or getattr(self._env, "current_track_vehicle", None)
+            or getattr(self._env, "vehicle", None)
+        )
+        if vehicle is None or not hasattr(vehicle, "lidar") or vehicle.lidar is None:
+            return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        objs = vehicle.lidar.get_surrounding_objects(vehicle)
+        if not objs:
+            return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        ego_heading = float(vehicle.heading_theta)
+        cos_h = np.cos(ego_heading)
+        sin_h = np.sin(ego_heading)
+        ego_speed_ms = float(vehicle.speed_km_h) / 3.6
+        ego_pos = vehicle.position
+
+        lead_dist = 50.0
+        lead_rel_v = 0.0
+        lead_lat = 0.0
+        lead_obj = None
+
+        intersection_threat = 0.0
+        lane_idx = getattr(vehicle, "lane_index", None)
+        is_intersection_approach = False
+        if isinstance(lane_idx, tuple) and len(lane_idx) >= 2:
+            is_intersection_approach = "X" in str(lane_idx[0]) or "X" in str(lane_idx[1])
+
+        for obj in objs:
+            rel = obj.position - ego_pos
+            dx = float(rel[0] * cos_h + rel[1] * sin_h)
+            dy = float(-rel[0] * sin_h + rel[1] * cos_h)
+
+            obj_heading = float(getattr(obj, "heading_theta", ego_heading))
+            heading_diff = obj_heading - ego_heading
+            heading_cos = float(np.cos(heading_diff))
+            heading_sin = float(np.sin(heading_diff))
+            obj_speed_ms = float(getattr(obj, "speed_km_h", 0.0)) / 3.6
+            v_y = obj_speed_ms * heading_sin
+
+            # Ignore oncoming traffic in opposing lanes
+            if heading_cos < -0.40 and abs(dy) >= 1.5:
+                continue
+
+            # 1. Lead vehicle detection in ego lane corridor
+            if 0.5 < dx < 50.0:
+                if abs(dy) < 2.15:
+                    if dx < lead_dist:
+                        lead_dist = dx
+                        lead_obj = obj
+                        lead_lat = dy
+
+            # 2. Cross-traffic detection at intersections (only vehicles inside or moving toward ego path)
+            if is_intersection_approach and 1.0 < dx < 22.0 and abs(dy) < 6.0:
+                if abs(dy) < 2.2 or (dy * v_y < -0.2):
+                    dist = np.linalg.norm(rel)
+                    threat = float(np.clip(1.0 - (dist / 18.0), 0.0, 1.0))
+                    if threat > intersection_threat:
+                        intersection_threat = threat
+
+        if lead_obj is not None:
+            lead_heading = float(getattr(lead_obj, "heading_theta", ego_heading))
+            lead_vx = (float(getattr(lead_obj, "speed_km_h", 0.0)) / 3.6) * max(0.0, float(np.cos(lead_heading - ego_heading)))
+            lead_rel_v = float(np.clip((lead_vx - ego_speed_ms) / 20.0, -1.0, 1.0))
+            lead_lat = float(np.clip(lead_lat / 3.5, -1.0, 1.0))
+
+        norm_lead_dist = float(np.clip(lead_dist / 50.0, 0.0, 1.0))
+
+        return np.array(
+            [norm_lead_dist, lead_rel_v, lead_lat, intersection_threat],
+            dtype=np.float32,
+        )
+
 
 
 def make_env(env_cfg: dict[str, Any]) -> MetaDriveImageEnv:

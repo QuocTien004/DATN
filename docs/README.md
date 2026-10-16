@@ -11,6 +11,7 @@ giữ tên một số file để bảo toàn liên kết lịch sử.
 6. [Lịch sử sửa lỗi và migration](RETRAINING_NOTES.md).
 7. [Tài liệu kiểm định P1–P4 và kết quả thực nghiệm toàn diện](P1_P4_AUDIT.md): **Tài liệu chính** ghi nhận đầy đủ refit H15, lane jump breakdown, action ranking, failure recall, critic audit & warm-up, RL pilot, ảo ảnh chân trời ngắn $H=15$, và hiện tượng Freezing Robot 100k bước.
 8. [Cập nhật nhánh Tien](TIEN_UPDATE_P1_P4.md): Quá trình chuẩn hóa kỹ thuật và tích hợp theo chuẩn nhánh Bao.
+9. [Tài liệu Bộ điều khiển An toàn & Demo 3D](SAFETY_SHIELD_AND_DEMO_GUIDE.md): Hệ thống Safe Control ACC/AEB nhận biết hướng di chuyển ($\cos\Delta\theta$), nâng cấp Actor-Critic, công cụ trực quan 3D, hỗ trợ map Marathon siêu dài và kết quả Benchmark 100% về đích.
 
 ## Hình lịch sử
 

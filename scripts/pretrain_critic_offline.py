@@ -45,7 +45,7 @@ def symlog(x: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
     return torch.sign(x) * torch.log1p(torch.abs(x))
 
 
-def load_dataset(data_dir: str, splits: list[str], gamma: float = 0.997):
+def load_dataset(data_dir: str, splits: list[str], gamma: float = 0.997, target_c_dim: int = 0):
     """Load offline transitions and compute discounted symlog return targets."""
     all_hard = []
     all_c = []
@@ -63,10 +63,13 @@ def load_dataset(data_dir: str, splits: list[str], gamma: float = 0.997):
         d = np.load(f)
         r = d["reward"]
         h = d["hard"]  # shape (T+1, 1536)
-        c = d["c"]     # shape (T+1, 19)
+        c = d["c"]     # shape (T+1, 19) or (T+1, 23)
         n = len(r)
         h = h[:n]  # match T steps
         c = c[:n]
+        if target_c_dim == 23 and c.shape[-1] == 19:
+            pad = np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (len(c), 1))
+            c = np.concatenate([c, pad], axis=-1)
         g = compute_discounted_returns(r, gamma=gamma)
         sym_g = symlog(g)
 
@@ -161,8 +164,8 @@ def main():
     critic = Critic(critic_cfg, deter_dim=512, stoch_size=1024).to(device)
 
     # Load Train and Test datasets
-    train_hard, train_c, train_targets, _, _, _ = load_dataset(args.data_dir, splits=["train"], gamma=args.gamma)
-    test_hard, test_c, _, test_clean, test_crash, test_out = load_dataset(args.data_dir, splits=["test"], gamma=args.gamma)
+    train_hard, train_c, train_targets, _, _, _ = load_dataset(args.data_dir, splits=["train"], gamma=args.gamma, target_c_dim=critic_cfg["critic_control_state_dim"])
+    test_hard, test_c, _, test_clean, test_crash, test_out = load_dataset(args.data_dir, splits=["test"], gamma=args.gamma, target_c_dim=critic_cfg["critic_control_state_dim"])
 
     # Pre-train evaluation
     print("\n--- Pre-training Critic Evaluation on Test Set ---")
