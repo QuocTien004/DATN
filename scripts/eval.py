@@ -19,6 +19,7 @@ import torch
 
 from envs.metadrive_wrapper import make_env
 from evaluation.evaluate import LatentActorPolicy, evaluate_policy
+from evaluation.safety_shield import AdaptiveTrafficAvoidanceShield
 from models.actor_critic import ActorCritic
 from models.world_model import build_world_model, load_world_model_state, validate_world_model_metadata
 from training.collect import random_action
@@ -39,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--start-seed", type=int, default=None)
     p.add_argument("--output", type=str, default=None, help="Save aggregate and per-seed JSON")
     p.add_argument("--horizon", type=int, default=None, help="Short smoke tests only; omit for full eval")
+    p.add_argument("--safety-shield", action="store_true", help="Experimental simulator traffic controller during evaluation")
     return p.parse_args()
 
 
@@ -103,6 +105,9 @@ def main() -> None:
         state_dim = int(
             wm_checkpoint.get("state_dim", agent_checkpoint.get("state_dim", 19))
         )
+        if 'state_dim' in env_cfg and int(env_cfg['state_dim']) != state_dim:
+            raise ValueError('Environment state_dim disagrees with checkpoint')
+        env_cfg = dict(env_cfg, state_dim=state_dim)
         action_dim = int(
             wm_checkpoint.get(
                 "action_dim",
@@ -168,6 +173,7 @@ def main() -> None:
             num_episodes=num_episodes,
             start_seed=start_seed,
             output_path=args.output,
+            shield=AdaptiveTrafficAvoidanceShield() if args.safety_shield else None,
         )
         print("=== Eval metrics ===")
         for k, v in metrics.items():

@@ -173,6 +173,9 @@ chứng minh run hoàn tất. Pipeline đã có code/tests, RL vẫn chưa đạ
 
 ## Next Steps — kế hoạch chưa thực hiện
 
+Kế hoạch bàn giao ngày 13/10 được giữ dưới đây để đối chiếu. Phần refit đã
+được Tien thực hiện và kiểm lại ngày 17/10. Trạng thái mới ở cuối tài liệu.
+
 1. **Ưu tiên refit riêng continuous transition cho 17 tọa độ không thuộc
    action-memory 5/6**, bật `exact_action_memory` ngay trong quá trình train.
    Giữ giao diện c19 của Actor và normalization. Không sửa checkpoint baseline.
@@ -192,3 +195,117 @@ chứng minh run hoàn tất. Pipeline đã có code/tests, RL vẫn chưa đạ
 
 Các bước trên là kế hoạch bàn giao, chưa phải ablation đã chạy hay recipe
 train dài được duyệt. Mặc định `exact_action_memory=false` vẫn giữ nguyên.
+
+## Cập nhật 17/10/2026 — refit và checkpoint c23
+
+Đã kiểm source Tien `559d55b`, `add8a30`, `393b569`, checkpoint thật và log.
+Audit cũ đã có trong Bao, không merge trùng. Không nhập script bỏ readiness
+guard, pilot hoặc train dài. Kết quả bên dưới phân biệt tính lại từ dữ liệu
+với số liệu do Tien lưu sẵn.
+
+### Refit exact-memory: cải thiện cục bộ, gate vẫn fail
+
+Đã tải strict hai branch seed0/1 ở update2000, xác nhận chỉ `transition.*`
+đổi so với BC. Tính lại trên150 episode valid/test/confirmation có checksum,
+bốn model, H1/H5/H15, cả off-BC và nhóm noise/swerve/fast. Không tối ưu model.
+Hai seed mới dùng exact memory trong train. Đối chứng refit cũ bật P2 sau train.
+
+| Model, test noise/swerve/fast | Lateral hold H5 | Lateral hold H15 | Heading delta H5 | Heading delta H15 |
+|---|---:|---:|---:|---:|
+| Prior BC cũ |2,082|2,634|0,618|1,204|
+| Refit cũ + P2 sau train, seed0 |1,399|0,897|1,479|0,902|
+| Refit exact-memory seed0 |1,149|0,610|1,664|1,686|
+| Refit exact-memory seed1 |1,298|0,782|1,419|1,086|
+
+Mỗi tỷ số phải <1 theo gate cũ. Hai seed mới có lateral hold H15 tốt hơn,
+nhưng lateral H5 và heading delta H5/H15 còn fail trên test. H1 chỉ diagnostic.
+Confirmation đẹp không thay gate regression. Nhóm được gọi moving-offBC
+lọc theo mode, **không lọc tốc độ**, nên vẫn có xe kẹt.
+Không bỏ episode `test_44205_swerve` để công bố pass. Việc đánh dấu lane jump
+bằng `abs(delta_lateral)>0.2` chỉ là proxy, chưa chứng minh lane reference đổi.
+
+### c23 là nhánh BC observed-state khác
+
+Checkpoint SHA-256:
+`40f93a392b9e493504cdfb69baa3bec857421c7f9df96a82574202a5407b2da8`.
+File có state23/action2, `control_input=observed`, Actor và Critic control23,
+**không có `rssm.continuous_state` hoặc trọng số `continuous.*`**.
+23 gồm19 tọa độ gốc và4 đặc trưng vật cản từ simulator: khoảng cách xe trước,
+vận tốc tương đối, lệch ngang, mức đe dọa giao cắt. Actor dùng observation
+hiện tại trực tiếp ngoài h/z. Đây không phải Actor chỉ dùng model-state.
+
+Metadata BC ghi2.000 updates, optimizer cũng ở bước2.000, expert manifest
+6.000 transitions, seed0. Metadata warm-up Critic ghi1.000 updates. Đã strict
+load và kiểm forward/reset hữu hạn trên input tổng hợp. Chưa có đủ artifact
+WM23/expert23 và log train để tái tạo toàn bộ recipe hoặc xác nhận tuyên bố
+WM được train từ25k mẫu. H1/H5/H15 của c19 không được gán cho checkpoint c23.
+
+JSON trong commit Tien `393b569`, maps10000–10009, horizon1000:
+
+| Policy theo tên artifact | Route | Finish | Va xe/vật cản | Ra đường |
+|---|---:|---:|---:|---:|
+| c23 thuần |84,46%|5/10|4/10|0/10|
+| c23 + shield |98,68%|10/10|0/10|0/10|
+
+Đã tính lại aggregate từ từng episode, chưa chạy lại vòng kín. JSON không
+kèm checkpoint hash, đầy đủ runtime/config hoặc trajectory để gắn chắc với
+artifact và phiên bản shield. Mười maps này từng dùng trong eval RL30k, nên
+không gọi là confirmation mới. Số bước trung bình c23 thuần là447,2, không
+phải685,2 như tài liệu Tien. Chỉ số này tính cả lượt chết sớm, không phải thời
+gian về đích trung bình. Không kết luận shield nhanh hơn từ hai trung bình.
+
+### Những kết luận phải điều chỉnh
+
+- Warm-up c19 giữ nguyên Encoder, posterior, Actor và cấu hình Actor của BC.
+  Kiểm tensor và probe32 state cho action chênh0. Refit prior/Critic không
+  thay action deterministic của policy quan sát. Mức71,78% trong pilot không
+  chứng minh BC cải thiện nhờ warm-up.
+- Các script pilot/long-run ghi map44200... nhưng dùng `map+1234/map+2234`
+  làm `start_seed` của môi trường, thay vì giữ map và chỉ đổi global RNG.
+  Vì vậy không paired với benchmark57,24% của Bao. Log vẫn cho thấy suy giảm
+  nội bộ71,77%→27,82% sau50updates và71,78%→19,56% sau25updates.
+- Warm-up Critic dùng cached c đã normalize làm `control_state`, trong khi
+  Critic còn normalize input lần nữa và inference c19 dùng state đã decode.
+  Bản23 còn đệm dữ liệu19 bằng hằng số và dùng h/z cache của WM cũ. Đây là
+  mismatch trong script, chưa đủ bằng chứng mọi lần train đều dùng đúng
+  phiên bản script này. Chưa xác minh Critic trên feature c23 thật.
+- Critic xuất giá trị symlog. So chênh0,85 trực tiếp với reward gốc−20 là
+  khác đơn vị. Warm-up return còn cần xử lý timeout và kiểm residual trên
+  validation/test, không chỉ so mean clean/crash.
+- Ranking có105 dòng =35 cặp ×3 sampling seeds, không phải105 cặp độc lập.
+  Swerve riêng đạt75–83,3% ở một số biến thể, fast0% và tổng hợp thấp hơn.
+  File kết quả ghi `critic_evaluated=false`.
+- Script long-run tùy biến đặt return/advantage trong `no_grad`, khiến phần
+  objective return không còn gradient tới Actor. Chưa thể quy toàn bộ collapse
+  cho horizon15 hay sửa bằng kéo dài horizon.
+
+### Phần tích hợp và hướng sử dụng
+
+Giữ hỗ trợ observation23 và shield **chỉ khi bật rõ**, cùng passthrough map/
+render. State mặc định19, weights và configs baseline giữ nguyên. Sửa wrapper
+để RSSM nhận action sau shield, reset trạng thái shield mỗi episode và log đủ
+can thiệp. Bỏ hai tham số shield vốn không có tác dụng trong source Tien.
+Không nhập regularizer RL, warm-up, pilot/long-run hoặc các khẳng định thành
+công chưa đủ bằng chứng. Hướng dẫn ở [eval experimental](EXPERIMENTAL_EVALUATION.md).
+Regression137/137 pass trên CPU, gồm10 test mới. Đây là kiểm hợp đồng code,
+không chứng minh kết quả10/10 của Tien sẽ giữ nguyên sau sửa wrapper.
+
+### Hướng tiếp theo sau audit 17/10
+
+1. Giữ RL khóa. Không lặp refit đã có hoặc resume30k. Kiểm lại posterior,
+   heading delta và hệ quy chiếu lateral bằng ablation riêng có đối chứng.
+2. Trước khi dùng warm-up, sửa contract feature/normalization của Critic và
+   protocol map/RNG, hoàn thiện provenance của WM23, expert23 và evaluation.
+   Đây là đề xuất, chưa sửa/train Critic trong lượt audit.
+3. Hướng dự phòng khả thi nhất là WM + BC, so latent-only, model-state19,
+   observed-state23 và có/không shield trên cùng dữ liệu, maps mới và nhiều
+   seed. Cần thêm policy chỉ dùng state để đo đóng góp thực sự của WM.
+4. Offline refit là học dự đoán. Warm-up Critic là hồi quy return. Offline RL
+   phải học policy tối ưu reward từ dữ liệu cố định. Chỉ tắt thu dữ liệu online
+   trong script Actor–Critic không tự giải quyết model bias hoặc phân phối lệch.
+5. Online RL hiện rủi ro cao nhất. Chỉ khi c, reward/continue, ranking và Critic
+   đều đạt gate mới xét pilot≤250updates có early-stop. Chưa triển khai hướng mới.
+
+Nếu chốt phương án BC, cần thống nhất lại phạm vi với giảng viên khi đề cương
+yêu cầu Actor–Critic học từ imagination và đối chứng PPO/SAC. Chưa có căn cứ
+khẳng định BC hiện tại đã đáp ứng đầy đủ các tiêu chí đó.

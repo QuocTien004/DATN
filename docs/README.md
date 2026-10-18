@@ -1,6 +1,6 @@
 # Tài liệu dự án
 
-Bắt đầu từ [README](../README.md). Đối chiếu source ngày 13/10/2026;
+Bắt đầu từ [README](../README.md). Đối chiếu source ngày 17/10/2026;
 giữ tên một số file để bảo toàn liên kết lịch sử.
 
 1. [Kiến trúc h/z/c và pipeline](phase_c.md).
@@ -10,7 +10,9 @@ giữ tên một số file để bảo toàn liên kết lịch sử.
 5. [Tests và tái lập](notes.md).
 6. [Lịch sử sửa lỗi và migration](RETRAINING_NOTES.md).
 7. [Audit P1–P4, các bộ benchmark và Next Steps](P1_P4_AUDIT.md):
-   đã tích hợp vào Bao, RL vẫn khóa (13/10/2026).
+   gồm kiểm chứng refit exact-memory và checkpoint c23, RL vẫn khóa (17/10/2026).
+8. [Eval thử nghiệm state23 và traffic shield](EXPERIMENTAL_EVALUATION.md):
+   opt-in, giữ state19 mặc định, chưa phải benchmark đã tái lập trên Bao.
 
 ## Hình lịch sử
 

@@ -12,6 +12,7 @@ from evaluation.metrics import aggregate_episode_metrics, compute_episode_metric
 from models.actor_critic import ActorCritic
 from models.control_state import with_predicted_control
 from models.continuous_state import with_continuous_control
+from evaluation.safety_shield import AdaptiveTrafficAvoidanceShield, SafeLatentActorPolicy
 
 
 class LatentActorPolicy:
@@ -57,6 +58,13 @@ class LatentActorPolicy:
             1, self.actor_critic.action_dim, device=self.device
         )
 
+    def record_executed_action(self, action: np.ndarray) -> None:
+        value = np.asarray(action, dtype=np.float32)
+        if (value.shape != (self.actor_critic.action_dim,)
+                or not np.isfinite(value).all() or (np.abs(value) > 1).any()):
+            raise ValueError('Executed action must be finite, bounded and match action_dim')
+        self._previous_action = torch.tensor(value, device=self.device).unsqueeze(0)
+
     def __call__(self, observation: dict[str, np.ndarray]) -> np.ndarray:
         if self._latent is None or self._previous_action is None:
             self.reset()
@@ -101,6 +109,7 @@ def evaluate_policy(
     num_episodes: int = 20,
     start_seed: int = 10000,
     output_path: str | Path | None = None,
+    shield: AdaptiveTrafficAvoidanceShield | None = None,
 ) -> dict[str, float]:
     """
     Run policy in MetaDrive for `num_episodes` on hold-out seeds.
@@ -109,6 +118,10 @@ def evaluate_policy(
     """
     if num_episodes <= 0:
         raise ValueError("num_episodes must be positive")
+    if shield is not None and not isinstance(policy_fn, SafeLatentActorPolicy):
+        policy_fn = SafeLatentActorPolicy(policy_fn, shield=shield, env=env)
+    elif isinstance(policy_fn, SafeLatentActorPolicy):
+        policy_fn.set_env(env)
     episode_metrics: list[dict[str, float]] = []
 
     for i in range(num_episodes):
@@ -124,9 +137,13 @@ def evaluate_policy(
         done = False
         episode_return = 0.0
         episode_length = 0
+        shield_interventions = 0
 
         while not done:
             action = policy_fn(obs)
+            if isinstance(policy_fn, SafeLatentActorPolicy):
+                diag = policy_fn.last_shield_diag
+                shield_interventions += int(bool(diag.get('throttle_override') or diag.get('steering_override')))
             obs, reward, terminated, truncated, info = env.step(action)
             info_history.append(info)
             crashed = crashed or bool(
@@ -157,6 +174,8 @@ def evaluate_policy(
         episode_metrics[-1]["seed"] = start_seed + i
         episode_metrics[-1]["terminated"] = bool(terminated)
         episode_metrics[-1]["truncated"] = bool(truncated)
+        if isinstance(policy_fn, SafeLatentActorPolicy):
+            episode_metrics[-1]['shield_interventions'] = shield_interventions
 
     metrics = aggregate_episode_metrics(episode_metrics)
     if output_path is not None:
@@ -164,6 +183,7 @@ def evaluate_policy(
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(json.dumps({
             "horizon": getattr(env, "env_cfg", {}).get("horizon"),
+            "safety_shield": isinstance(policy_fn, SafeLatentActorPolicy),
             "aggregate": metrics, "episodes": episode_metrics,
         }, indent=2), encoding="utf-8")
     return metrics
