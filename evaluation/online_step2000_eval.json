@@ -1,0 +1,136 @@
+{
+  "horizon": 1000,
+  "aggregate": {
+    "success_rate": 0.0,
+    "collision_rate": 1.0,
+    "crash_rate": 1.0,
+    "out_of_road_rate": 1.0,
+    "crash_vehicle_rate": 0.0,
+    "mean_route_completion": 0.02370013634065272,
+    "mean_episode_return": -18.72369413431614,
+    "mean_episode_length": 21.0,
+    "num_episodes": 10.0
+  },
+  "episodes": [
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.02468312204644589,
+      "episode_return": -18.42591167149266,
+      "episode_length": 26.0,
+      "seed": 10000,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.023026156067608546,
+      "episode_return": -18.46292931655263,
+      "episode_length": 26.0,
+      "seed": 10001,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.023647980418229776,
+      "episode_return": -18.473941469461742,
+      "episode_length": 26.0,
+      "seed": 10002,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.0372800221214467,
+      "episode_return": -18.419596238642985,
+      "episode_length": 25.0,
+      "seed": 10003,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.01599122000103811,
+      "episode_return": -19.265271275275325,
+      "episode_length": 9.0,
+      "seed": 10004,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.02387485047421458,
+      "episode_return": -18.511850798245327,
+      "episode_length": 25.0,
+      "seed": 10005,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.03116368398758685,
+      "episode_return": -18.467383704712123,
+      "episode_length": 25.0,
+      "seed": 10006,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.017974695926449135,
+      "episode_return": -18.95607376224653,
+      "episode_length": 20.0,
+      "seed": 10007,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.016724443957840163,
+      "episode_return": -19.288302773433912,
+      "episode_length": 9.0,
+      "seed": 10008,
+      "terminated": true,
+      "truncated": false
+    },
+    {
+      "success": 0.0,
+      "collision": 1.0,
+      "out_of_road": 1.0,
+      "crash_vehicle": 0.0,
+      "route_completion": 0.022635188405667438,
+      "episode_return": -18.965680333098188,
+      "episode_length": 19.0,
+      "seed": 10009,
+      "terminated": true,
+      "truncated": false
+    }
+  ]
+}

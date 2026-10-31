@@ -40,7 +40,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--start-seed", type=int, default=None)
     p.add_argument("--output", type=str, default=None, help="Save aggregate and per-seed JSON")
     p.add_argument("--horizon", type=int, default=None, help="Short smoke tests only; omit for full eval")
-    p.add_argument("--safety-shield", action="store_true", help="Experimental simulator traffic controller during evaluation")
+    p.add_argument("--safety-shield", action="store_true", help="Enable Adaptive Traffic Avoidance Shield (ACC/AEB)")
+    p.add_argument("--corridor-width", type=float, default=2.4, help="Longitudinal shield corridor width (m)")
+    p.add_argument("--threat-distance", type=float, default=28.0, help="Shield lookahead threat distance (m)")
+    p.add_argument("--min-gap", type=float, default=5.0, help="Minimum safe stopping gap (m)")
+    p.add_argument("--time-gap", type=float, default=1.2, help="Desired following time gap (s)")
     return p.parse_args()
 
 
@@ -166,6 +170,16 @@ def main() -> None:
     if args.horizon is not None:
         env_cfg["horizon"] = args.horizon
     env = make_env(env_cfg)
+    shield = None
+    if args.safety_shield:
+        shield = AdaptiveTrafficAvoidanceShield(
+            corridor_width=args.corridor_width,
+            threat_distance=args.threat_distance,
+            desired_time_gap=args.time_gap,
+            min_gap=args.min_gap,
+        )
+        print(f"[Shield] Adaptive Traffic Avoidance Shield ENABLED (corridor={args.corridor_width}m, threat_dist={args.threat_distance}m, min_gap={args.min_gap}m)")
+
     try:
         metrics = evaluate_policy(
             env,
@@ -173,7 +187,7 @@ def main() -> None:
             num_episodes=num_episodes,
             start_seed=start_seed,
             output_path=args.output,
-            shield=AdaptiveTrafficAvoidanceShield() if args.safety_shield else None,
+            shield=shield,
         )
         print("=== Eval metrics ===")
         for k, v in metrics.items():

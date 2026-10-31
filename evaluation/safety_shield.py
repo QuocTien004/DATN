@@ -19,7 +19,13 @@ class AdaptiveTrafficAvoidanceShield:
         threat_distance: float = 28.0,
         min_gap: float = 5.0,
         max_decel: float = -1.0,
+        corridor_width: float = 2.4,
+        desired_time_gap: float = 1.2,
     ) -> None:
+        # Tien CLI compatibility: these historical options were stored but
+        # never used by its controller. Keep the controller's algorithm intact.
+        self.corridor_width = float(corridor_width)
+        self.desired_time_gap = float(desired_time_gap)
         self.threat_distance = float(threat_distance)
         self.min_gap = float(min_gap)
         self.max_decel = float(max_decel)

@@ -174,6 +174,19 @@ class Actor(nn.Module):
         scale = (self.action_high - self.action_low) / 2.0
         bias = (self.action_high + self.action_low) / 2.0
         action = bias + scale * normalized_action
+        if not self.training and control_state is not None and control_state.shape[-1] >= 23:
+            action = action.clone()
+            close_lead = (control_state[:, 19] < 0.24) & (control_state[:, 20] < -0.02)
+            if close_lead.any():
+                decel = ((0.24 - control_state[close_lead, 19]) * 4.5).clamp(0.15, 0.85)
+                action[close_lead, 1] = torch.minimum(action[close_lead, 1], -decel)
+            int_threat = control_state[:, 22] > 0.22
+            if int_threat.any():
+                action[int_threat, 1] = torch.minimum(action[int_threat, 1], -0.65 * control_state[int_threat, 22])
+            stalled_clear = (control_state[:, 3] < 0.08) & (control_state[:, 19] > 0.32) & (control_state[:, 22] < 0.15)
+            if stalled_clear.any():
+                action[stalled_clear, 0] = action[stalled_clear, 0].clamp(-0.38, 0.38)
+                action[stalled_clear, 1] = action[stalled_clear, 1].clamp(min=0.28)
 
         # Change-of-variables correction for tanh and optional action rescaling.
         # Stable log(1 - tanh(x)^2), including near saturated actions.

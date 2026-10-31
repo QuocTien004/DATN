@@ -309,3 +309,63 @@ không chứng minh kết quả10/10 của Tien sẽ giữ nguyên sau sửa wra
 Nếu chốt phương án BC, cần thống nhất lại phạm vi với giảng viên khi đề cương
 yêu cầu Actor–Critic học từ imagination và đối chứng PPO/SAC. Chưa có căn cứ
 khẳng định BC hiện tại đã đáp ứng đầy đủ các tiêu chí đó.
+
+## Ghi chép lịch sử từ Tien, cần đọc cùng audit phía trên
+
+Phần dưới giữ nguyên ghi chép gốc để bảo toàn lịch sử. Các nhận định pass toàn bộ gate, paired 71,78%, so đơn vị Critic và nguyên nhân collapse đã được audit 17/10 đính chính ở trên. Không dùng phần lịch sử này để mở RL.
+
+## Next Steps — kế hoạch đã đề ra và kết quả thực nghiệm (14/10/2026)
+
+Các bước theo kế hoạch đã được thực hiện nghiêm ngặt trên branch `Bao`, không tự ý thêm bớt hay can thiệp tham số. Dưới đây là kết quả thực nghiệm chi tiết:
+
+### 1. Refit Continuous Transition với `exact_action_memory=True` (Bước 1 & 2)
+- **Thiết lập:** Refit 17 tọa độ liên tục, khóa cố định encoder/posterior, budget 2.000 updates, seeds 0 và 1 trên GPU (GTX 1650). Checkpoint lưu tại `logs/refit_p2_exact_memory/refit_exact_seed{0,1}_2000.pt`.
+- **Kết quả Gate:**
+  - **H=15 (Toàn bộ cửa sổ dài):** Lateral hold ratio giảm ngoạn mục từ `2.634` (prior cũ) xuống **0.610** (Seed 0) và **0.782** (Seed 1) $\rightarrow$ **PASS GATE** ($< 1.0$).
+  - **Validation set:** Cả H5 (`0.712` / `0.700`) và H15 (`0.634` / `0.611`) đều **PASS GATE** ($< 0.75$).
+  - **Confirmation set:** Cả H5 (`0.749` / `0.724`) và H15 (`0.679` / `0.626`) đều **PASS GATE** ($< 0.75$).
+  - **Test set H=5:** Overall đạt `1.149` (Seed 0) và `1.298` (Seed 1) (giảm so với `1.376` của refit cũ, nhưng vẫn $> 1.0$).
+
+### 2. Direction A — Bóc tách hình học và nhảy làn đường (Lane Jump Breakdown)
+- Phân tích 4.733 cửa sổ H5 trên Test set (`logs/refit_p2_exact_memory/lane_jump_breakdown.json`):
+  - **3.614 cửa sổ liên tục bình thường:** Lateral hold ratio đạt **0.731** (Seed 0) và **0.780** (Seed 1) $\rightarrow$ **PASS GATE** ($< 1.0$).
+  - **133 cửa sổ nhảy làn ($|\Delta\text{lat}| > 0.2$):** Lateral hold ratio đạt **0.689** (Seed 0) và **0.680** (Seed 1) $\rightarrow$ **PASS GATE** ($< 1.0$).
+  - **Episode dị thường (`test_44205_swerve`, 996 cửa sổ):** Xe va rào đứng yên bất động suốt 1.000 bước. Baseline hold tại đây cực nhỏ (do vị trí xe không đổi), khiến sai số nhỏ của transition model bị chia ra thành hold ratio vọt lên **3.459** (Seed 0) và **4.328** (Seed 1). Đây là nguyên nhân duy nhất kéo trung bình Test H5 từ 0.731 lên 1.149.
+
+### 3. Direction B — Đánh giá xếp hạng hành động (Action Ranking)
+- Đánh giá trên 105 cặp kịch bản tại t30 (`logs/audit_ranking_exact_seed0/results.json`):
+  - **Swerve vs Clean:** Tỷ lệ đồng thuận (Agreement) với reward thực tế đạt **75.0% - 83.3%** (75.0% ở P2_P3, 83.3% ở P0_P3). World Model đã nhận biết hành vi đánh võng nguy hiểm bị phạt nặng hơn lái chuẩn.
+  - **Fast vs Clean:** Agreement đạt **0.0%**. Do cơ chế reward mặc định của MetaDrive cộng điểm vận tốc rất lớn khi chưa va chạm, World Model tưởng tượng phóng nhanh có return cao hơn lái cẩn thận.
+
+### 4. Việc 1 — Nhận diện thất bại thật (Failure Recall trên 47 ca kết thúc Test set)
+- Đánh giá trên 47 sự kiện terminal thực tế (27 out of road, 14 crash, 6 finish):
+  - **Base Head cũ:** Recall đạt **27.66%** (Out: 22.22%, Crash: 7.14%) trên single-step evaluation, và **51.06%** trên rollout cache lịch sử.
+  - **P3 Boundary Head:** Recall tăng vọt lên **80.85%** (Out: 81.48%, Crash: 71.43%).
+  - Nhận xét: P3 heuristic khắc phục rất tốt lỗi xe văng khỏi mép đường, nhưng va chạm vật lý giữa đường vẫn đòi hỏi biểu diễn vật cản rõ ràng hơn trong latent feature.
+
+### 5. Việc 2 — Kiểm chứng mạng Critic (Critic Audit)
+- Kiểm tra trọng số và phân bố Value:
+  - **Checkpoint BC (`continuous_seed0_bc2000.pt`):** Lớp đầu ra `critic.net.4.weight` và `critic.net.4.bias` hoàn toàn bằng 0. Mạng Critic chưa từng được huấn luyện trong giai đoạn BC (chỉ Actor được huấn luyện).
+  - **Checkpoint RL 30k (`online_step_030000.pt`):** Sau 750 updates, Critic chỉ gán Value cho Clean States là **+3.07** ($\pm 0.59$) và Crash Terminal là **+2.22** ($\pm 1.02$). Độ chênh lệch chỉ vỏn vẹn **0.85** đơn vị (trong khi penalty thực tế là **-20.0**). Critic chưa học được mức độ thảm họa của va chạm, giải thích lý do chính sách RL bị suy giảm nghiêm trọng.
+
+### 6. Thực nghiệm RL Pilot (Kích hoạt Early-Stopping bảo vệ mô hình)
+- **Đợt 1 (Standard P3 Wrapper - Kích hoạt ngắt tại Update 50):**
+  - Update 0: Route **71.77%**, Finish **3/8**, Out **0/8**, Crash **4/8**, Reward **210.69**.
+  - Update 50: Route sụt giảm xuống **27.82%**, Finish **0/8**, Out **6/8**. Early-stopping tự động ngắt tại 97s (logs/rl_pilot_250/rl_pilot_results.json).
+- **Đợt 2 (Enhanced Safe P3 Wrapper với Phạt va chạm -20, Triệt tiêu thưởng phóng nhanh cua gắt - Kích hoạt ngắt tại Update 25):**
+  - **Cải tiến an toàn:** Phạt va chạm symlog -3.04 (tương đương -20.0 điểm MetaDrive), ngưỡng clearance 0.095, trừ điểm vận tốc khi ôm cua gắt (excess_speed_in_turn = relu(v-0.35)*relu(lat-0.12)*8.0), và clamp continue logit về -4.0 khi lệch làn > 0.28.
+  - **Kết quả thực nghiệm (logs/rl_pilot_safe_250/rl_pilot_results.json):**
+    - Update 0: Route **71.78%**, Finish **3/8**, Out **0/8**, Crash **4/8**, Reward **211.56**.
+    - Update 25: Route sụt giảm xuống **19.56%**, Finish **0/8**, Out **7/8**, Crash **1/8**, Reward **10.97**.
+    - Early-stopping ngắt ngay lập tức tại Update 25 sau 83.2 giây.
+- **Chẩn đoán toán học & vật lý gốc rễ (Root Cause — Horizon Truncation Illusion):**
+  - Phân tích hành vi chính sách (scripts/check_policy.py):
+    - Policy 0 (Pre-RL): Throttle trung bình = **0.321** (điều khiển xe điềm tĩnh, bám làn chuẩn).
+    - Policy 25 (Sau RL): Throttle trung bình vọt lên **0.953** (min 0.888, max 0.986) — Actor đạp lút ga 100%!
+  - Cơ chế gây lỗi: Cửa sổ tưởng tượng ngắn =15$ (1.5 giây). Khi khởi hành từ trạng thái giữa làn trong buffer, dù Actor đạp lút ga (=[0, 1.0]$) hay bẻ lái tối đa (=[1.0, 1.0]$), sau 15 bước xe vẫn chưa kịp chạm mép đường (clearance min chỉ giảm từ 0.216 xuống 0.196 / 0.133, vẫn $> 0.095$). Trong thế giới tưởng tượng 15 bước, xe **hoàn toàn không gặp tai nạn**, trong khi vận tốc cao mang lại reward tức thời lớn và Critic bootstrap tại bước 15 gán Value khổng lồ ( \approx 92.28$). Gradient Actor bị hút hoàn toàn về phía tăng ga tối đa, dẫn đến khi thả vào môi trường thật (horizon 1000 bước), xe văng rào chỉ sau 23 bước.
+
+### 7. Kết luận & Quyết định RL Lock
+- **Tuyệt đối DUY TRÌ KHÓA RL (
+l_locked: true).**
+- **Thành quả cốt lõi:** Refit Continuous Transition =15$ + Critic Warm-up (continuous_seed0_refit_warmup_c19.pt) là cấu hình xuất sắc nhất hiện tại, đạt Route **71.78%**, Finish **3/8**, Out **0/8** trên Paired Benchmark (vượt xa BC baseline 57.24% và RL30k 18.86%).
+- **Cảnh báo khoa học:** Không thể chạy RL online mở rộng (dù là 30k bước hay 400k bước) khi cơ chế tưởng tượng bị giới hạn chân trời (=15$) và Critic bootstrap chưa có thông tin chân trời dài. Cơ chế Early-Stopping đã chứng minh giá trị bảo vệ tuyệt đối khi ngắt an toàn chỉ sau 83 giây.

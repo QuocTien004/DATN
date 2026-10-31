@@ -225,11 +225,40 @@ class ActorCriticTests(unittest.TestCase):
             "done": torch.zeros(2, 3, dtype=torch.bool),
         }
         starts = posterior_start_states(
-            batch, {"encoder": encoder, "rssm": rssm}, max_states=4
+            batch, {"encoder": encoder, "rssm": rssm}, max_states=4, include_actions=True
         )
         self.assertEqual(starts["h"].shape, (4, 8))
         self.assertEqual(starts["z"].shape, (4, 2, 3))
+        self.assertIn("action", starts)
+        self.assertEqual(starts["action"].shape, (4, 2))
         self.assertFalse(starts["h"].requires_grad)
+
+    def test_bc_anchor_loss(self) -> None:
+        cfg = _config()
+        cfg["bc_scale"] = 1.0
+        deter_dim, groups, classes, action_dim = 8, 2, 3, 2
+        actor_critic = ActorCritic(cfg, deter_dim, groups * classes, action_dim)
+        actor_opt = torch.optim.Adam(actor_critic.actor.parameters(), lr=1e-3)
+        critic_opt = torch.optim.Adam(actor_critic.critic.parameters(), lr=1e-3)
+        wm = {
+            "rssm": FakeRSSM(deter_dim, action_dim),
+            "reward": FakeReward(),
+            "continue": FakeContinue(),
+        }
+        start = _state(2, deter_dim, groups, classes)
+        demo_states = _state(2, deter_dim, groups, classes)
+        demo_states["action"] = torch.zeros(2, action_dim)
+        metrics = train_actor_critic_step(
+            start,
+            wm,
+            actor_critic,
+            actor_opt,
+            critic_opt,
+            cfg,
+            demo_states=demo_states,
+        )
+        self.assertIn("bc_loss", metrics)
+        self.assertGreater(metrics["bc_loss"], 0.0)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import torch
 
 from envs.metadrive_wrapper import MetaDriveImageEnv
 from evaluation.metrics import aggregate_episode_metrics, compute_episode_metrics
+from evaluation.safety_shield import AdaptiveTrafficAvoidanceShield, SafeLatentActorPolicy
 from models.actor_critic import ActorCritic
 from models.control_state import with_predicted_control
 from models.continuous_state import with_continuous_control
@@ -115,6 +116,7 @@ def evaluate_policy(
     Run policy in MetaDrive for `num_episodes` on hold-out seeds.
 
     Stateful policies may expose ``reset()``; it is called after each env reset.
+    If ``shield`` is provided, policy_fn is wrapped with SafeLatentActorPolicy.
     """
     if num_episodes <= 0:
         raise ValueError("num_episodes must be positive")

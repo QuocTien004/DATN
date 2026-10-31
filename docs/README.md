@@ -13,6 +13,8 @@ giữ tên một số file để bảo toàn liên kết lịch sử.
    gồm kiểm chứng refit exact-memory và checkpoint c23, RL vẫn khóa (17/10/2026).
 8. [Eval thử nghiệm state23 và traffic shield](EXPERIMENTAL_EVALUATION.md):
    opt-in, giữ state19 mặc định, chưa phải benchmark đã tái lập trên Bao.
+9. [Ghi chép nhánh Tien](TIEN_UPDATE_P1_P4.md): đọc cùng đính chính trong audit.
+10. [Hướng dẫn demo 3D của Tien](SAFETY_SHIELD_AND_DEMO_GUIDE.md): tài liệu lịch sử, kết quả từng bộ map cần đối chiếu JSON.
 
 ## Hình lịch sử
 

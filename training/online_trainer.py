@@ -49,6 +49,8 @@ class OnlineTrainer:
         train_env_cfg: dict[str, Any],
         eval_env_cfg: dict[str, Any],
         demo_buffer: ReplayBuffer | None = None,
+        safe_collect: bool = False,
+        shield_cfg: dict[str, Any] | None = None,
     ) -> None:
         actor_critic.require_imagination_ready()
         self.configs = configs
@@ -64,6 +66,17 @@ class OnlineTrainer:
         self.train_env_cfg = dict(train_env_cfg)
         self.eval_env_cfg = dict(eval_env_cfg)
         self.demo_buffer = demo_buffer
+        self.safe_collect = safe_collect
+        self.shield = None
+        if self.safe_collect:
+            from evaluation.safety_shield import AdaptiveTrafficAvoidanceShield
+            sc_cfg = shield_cfg or {}
+            self.shield = AdaptiveTrafficAvoidanceShield(
+                corridor_width=float(sc_cfg.get("corridor_width", 2.4)),
+                threat_distance=float(sc_cfg.get("threat_distance", 28.0)),
+                desired_time_gap=float(sc_cfg.get("desired_time_gap", 1.2)),
+                min_gap=float(sc_cfg.get("min_gap", 5.0)),
+            )
         buffer_cfg = configs.get("train", {}).get("buffer", {})
         self.demo_ratio = float(buffer_cfg.get("demo_ratio", 0.0))
         self.term_ratio = float(buffer_cfg.get("term_ratio", 0.25))
@@ -79,19 +92,23 @@ class OnlineTrainer:
         self._episode_return: float = 0.0
         self._episode_length: int = 0
         self._is_first: bool = True
-        self._policy: LatentActorPolicy | None = None
+        self._policy = None
 
     # ------------------------------------------------------------------
     # Policy helpers
     # ------------------------------------------------------------------
-    def _make_policy(self, *, deterministic: bool = False) -> LatentActorPolicy:
-        return LatentActorPolicy(
+    def _make_policy(self, *, deterministic: bool = False):
+        raw = LatentActorPolicy(
             self.world_model["encoder"],
             self.world_model["rssm"],
             self.actor_critic,
             device=self.device,
             deterministic=deterministic,
         )
+        if self.safe_collect and not deterministic:
+            from evaluation.safety_shield import SafeLatentActorPolicy
+            return SafeLatentActorPolicy(raw, shield=self.shield, env=self.train_env)
+        return raw
 
     def _refresh_policy(self) -> None:
         """Recreate the exploration policy so it uses the latest weights."""
@@ -271,6 +288,8 @@ class OnlineTrainer:
         train_cfg = self.configs.get("train", {})
         ac_cfg = train_cfg.get("actor_critic", train_cfg)
         max_start = int(ac_cfg.get("max_start_states", 64))
+        bc_scale = float(ac_cfg.get("bc_scale", 0.0))
+        use_control = bool(getattr(self.actor_critic.actor, "control_state_dim", 0))
         accum: dict[str, float] = {}
 
         # Freeze WM for imagination
@@ -292,6 +311,27 @@ class OnlineTrainer:
                 batch, self.world_model, max_states=max_start
             )
             del batch
+
+            demo_states = None
+            if bc_scale > 0.0 and self.demo_buffer is not None:
+                try:
+                    raw_demo = self.demo_buffer.sample(min(batch_size, len(self.demo_buffer)), term_ratio=self.term_ratio)
+                except MemoryError:
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    raw_demo = self.demo_buffer.sample(min(batch_size, len(self.demo_buffer)), term_ratio=self.term_ratio)
+                demo_batch = replay_batch_to_torch(raw_demo, self.device)
+                del raw_demo
+                demo_states = posterior_start_states(
+                    demo_batch,
+                    self.world_model,
+                    max_states=max_start,
+                    include_control=use_control,
+                    include_actions=True,
+                )
+                del demo_batch
+
             metrics = train_actor_critic_step(
                 start_states,
                 self.world_model,
@@ -299,8 +339,11 @@ class OnlineTrainer:
                 self.actor_optimizer,
                 self.critic_optimizer,
                 ac_cfg,
+                demo_states=demo_states,
             )
             del start_states
+            if demo_states is not None:
+                del demo_states
             for k, v in metrics.items():
                 accum[k] = accum.get(k, 0.0) + v
 
@@ -432,6 +475,7 @@ class OnlineTrainer:
             "total_episodes": self.total_episodes,
             "models": {
                 name: m.state_dict() for name, m in self.world_model.items()
+                if name != "control_state"
             },
             "actor_critic": self.actor_critic.state_dict(),
             "wm_optimizer": self.wm_optimizer.state_dict(),
