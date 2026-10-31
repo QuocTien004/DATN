@@ -103,7 +103,7 @@ def train_world_model_step(
     B, T = image.shape[:2]
     device = image.device
 
-    # One shot encode (B*T); with batch=8,seq=32 this is 256 frames — fine on 4GB after decoder fix
+    # Encode the flattened B*T frames in one batch before the recurrent unroll.
     e = enc(_flatten_time(image), _flatten_time(state)).reshape(B, T, -1)
 
     prev = rssm.initial_state(B, device)

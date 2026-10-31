@@ -30,13 +30,13 @@ from utils.checkpoint import load_checkpoint
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = ROOT / "logs" / "refit_p2_exact_memory"
-    data_dir = Path("d:/DoAnTotNghiep/worldmodel-metadrive/data/offbc_episodes")
-    index_path = Path("d:/DoAnTotNghiep/worldmodel-metadrive/logs/p2_eval/offbc_dataset_index.json")
+    data_dir = ROOT / "data" / "offbc_episodes"
+    index_path = ROOT / "logs" / "p2_eval" / "offbc_dataset_index.json"
 
     print(f"=== DIRECTION A: LANE REFERENCE & GEOMETRY AUDIT (Device: {device}) ===")
 
     # 1. Load baseline & branches
-    ck = load_checkpoint("d:/DoAnTotNghiep/worldmodel-metadrive/checkpoints/p0_baseline/continuous_seed0_bc2000.pt", map_location="cpu")
+    ck = load_checkpoint(ROOT / "checkpoints/p0_baseline/continuous_seed0_bc2000.pt", map_location="cpu")
     enc = Encoder(ck["wm_cfg"], 19, tuple(ck.get("image_shape", (64, 64, 3))))
     rssm_sd = ck["models"]["rssm"]
     cont_sd = {k[len("continuous.") :]: v for k, v in rssm_sd.items() if k.startswith("continuous.")}

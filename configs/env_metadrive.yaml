@@ -9,7 +9,7 @@ start_seed: 0
 use_render: false
 
 # Image observation — CHỈ 1 camera TRƯỚC (rgb_camera).
-# Không dùng multi-view trái/phải/sau: tập trung chất lượng model trên 1650.
+# Dùng một góc nhìn trước để giữ thống nhất hợp đồng ảnh đầu vào.
 image_observation: true
 image_source: rgb_camera
 image_height: 64

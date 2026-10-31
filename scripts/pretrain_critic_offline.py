@@ -129,7 +129,7 @@ def evaluate_critic(critic: Critic, test_hard: torch.Tensor, test_c: torch.Tenso
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-checkpoint", required=True, help="Baseline BC checkpoint")
-    parser.add_argument("--data-dir", default="d:/DoAnTotNghiep/worldmodel-metadrive/data/offbc_episodes")
+    parser.add_argument("--data-dir", default="data/offbc_episodes")
     parser.add_argument("--out-checkpoint", required=True, help="Where to save checkpoint with warm-up Critic")
     parser.add_argument("--updates", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=128)

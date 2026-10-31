@@ -188,9 +188,9 @@ def evaluate_prior(branch: ContinuousState, eps: list[dict], device: torch.devic
 
 def main():
     p = argparse.ArgumentParser(description="Refit Continuous Transition with exact_action_memory=True")
-    p.add_argument("--baseline-checkpoint", default="d:/DoAnTotNghiep/worldmodel-metadrive/checkpoints/p0_baseline/continuous_seed0_bc2000.pt")
-    p.add_argument("--dataset-index", default="d:/DoAnTotNghiep/worldmodel-metadrive/logs/p2_eval/offbc_dataset_index.json")
-    p.add_argument("--data-dir", default="d:/DoAnTotNghiep/worldmodel-metadrive/data/offbc_episodes")
+    p.add_argument("--baseline-checkpoint", default="checkpoints/p0_baseline/continuous_seed0_bc2000.pt")
+    p.add_argument("--dataset-index", default="logs/p2_eval/offbc_dataset_index.json")
+    p.add_argument("--data-dir", default="data/offbc_episodes")
     p.add_argument("--out-dir", default="logs/refit_p2_exact_memory")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--updates", type=int, default=2000)

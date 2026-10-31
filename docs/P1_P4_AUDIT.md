@@ -319,7 +319,7 @@ Phần dưới giữ nguyên ghi chép gốc để bảo toàn lịch sử. Các
 Các bước theo kế hoạch đã được thực hiện nghiêm ngặt trên branch `Bao`, không tự ý thêm bớt hay can thiệp tham số. Dưới đây là kết quả thực nghiệm chi tiết:
 
 ### 1. Refit Continuous Transition với `exact_action_memory=True` (Bước 1 & 2)
-- **Thiết lập:** Refit 17 tọa độ liên tục, khóa cố định encoder/posterior, budget 2.000 updates, seeds 0 và 1 trên GPU (GTX 1650). Checkpoint lưu tại `logs/refit_p2_exact_memory/refit_exact_seed{0,1}_2000.pt`.
+- **Thiết lập:** Refit 17 tọa độ liên tục, khóa cố định encoder/posterior, budget 2.000 updates, seeds 0 và 1 trên GPU. Checkpoint lưu tại `logs/refit_p2_exact_memory/refit_exact_seed{0,1}_2000.pt`.
 - **Kết quả Gate:**
   - **H=15 (Toàn bộ cửa sổ dài):** Lateral hold ratio giảm ngoạn mục từ `2.634` (prior cũ) xuống **0.610** (Seed 0) và **0.782** (Seed 1) $\rightarrow$ **PASS GATE** ($< 1.0$).
   - **Validation set:** Cả H5 (`0.712` / `0.700`) và H15 (`0.634` / `0.611`) đều **PASS GATE** ($< 0.75$).

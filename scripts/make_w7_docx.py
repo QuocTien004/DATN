@@ -7,8 +7,8 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-md_path = Path('d:/DoAnTotNghiep/BC_TienDo/12-10_18-10(W7).md')
-docx_path = Path('d:/DoAnTotNghiep/BC_TienDo/12-10_18-10(W7).docx')
+md_path = Path('reports/progress.md')
+docx_path = Path('reports/progress.docx')
 
 md_content = md_path.read_text(encoding='utf-8')
 

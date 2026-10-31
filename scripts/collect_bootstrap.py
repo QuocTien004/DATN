@@ -85,7 +85,7 @@ def main() -> None:
         boot_cfg = train_cfg.get("bootstrap", {})
         num_steps = int(args.steps if args.steps is not None else boot_cfg.get("num_steps", 20000))
 
-        # Capacity = collect size (not 100k): 100k×256² RGB ≈ 18GB RAM and OOMs on laptop GPUs/hosts.
+        # Bound replay capacity by the requested collection size to limit memory use.
         cfg_cap = int(buf_cfg.get("capacity", 100_000))
         capacity = min(cfg_cap, num_steps + 100)
         print(f"ReplayBuffer capacity={capacity} (requested steps={num_steps})")

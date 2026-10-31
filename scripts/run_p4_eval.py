@@ -47,7 +47,7 @@ def main():
     device = torch.device(args.device)
     p4_dir = ROOT / "logs" / "p4_eval"
     p4_dir.mkdir(parents=True, exist_ok=True)
-    MAIN_REPO = Path("d:/DoAnTotNghiep/worldmodel-metadrive")
+    MAIN_REPO = ROOT
     p3_dir = (ROOT / "logs" / "p3_eval") if (ROOT / "logs" / "p3_eval").exists() else (MAIN_REPO / "logs" / "p3_eval")
     p2_dir = (ROOT / "logs" / "p2_eval") if (ROOT / "logs" / "p2_eval").exists() else (MAIN_REPO / "logs" / "p2_eval")
     data_dir = (ROOT / "data" / "offbc_episodes") if (ROOT / "data" / "offbc_episodes").exists() else (MAIN_REPO / "data" / "offbc_episodes")
