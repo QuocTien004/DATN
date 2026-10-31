@@ -25,3 +25,9 @@ Thumbs.db
 
 .tools/
 
+# Private working notes have their own local Git history.
+/.agents/
+# Visual demo output is generated locally, never bundled with source.
+/demo_runs/
+/.venv-ui/
+
