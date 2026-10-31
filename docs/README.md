@@ -18,6 +18,10 @@ giữ tên một số file để bảo toàn liên kết lịch sử.
 
 ## Hình lịch sử
 
+Giao diện mới: [DEMO_UI](DEMO_UI.md) — Live, AI, từng bước, Replay CPU,
+thống kê và notebook Colab. Đọc phần timing và giới hạn bằng chứng trước
+khi trình bày kết quả.
+
 Giữ để tham khảo, không dùng làm benchmark baseline hiện tại:
 
 - [data_schema.png](data_schema.png): sơ đồ cũ 256×256, thiếu phân biệt

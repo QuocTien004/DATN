@@ -1,0 +1,43 @@
+.gradio-container {
+  --road-canvas:#0b1219; --road-panel:#111b24; --road-inset:#0d161e;
+  --road-line:rgba(179,204,218,.13); --lane-signal:#4cd4b0;
+  --ink-main:#e9f0f4; --ink-soft:#b9c8d0; --ink-muted:#7e96a5;
+  max-width:1560px!important; background:var(--road-canvas)!important;
+  color:var(--ink-main); font-family:'Segoe UI',Arial,sans-serif!important;
+  font-variant-numeric:tabular-nums; -webkit-font-smoothing:antialiased;
+}
+body {background:#0b1219!important}
+.lab-header {padding:12px 0 24px;display:flex;justify-content:space-between;gap:24px;align-items:end}
+.lab-header p {color:var(--lane-signal);font-size:11px;font-weight:600;letter-spacing:.16em;margin:0 0 8px}
+.lab-header h1 {font-size:30px;line-height:1.2;letter-spacing:-.03em;font-weight:650;margin:0}
+.lab-header .caption {font-size:13px;color:var(--ink-muted);max-width:340px;text-align:right;line-height:1.6}
+.telemetry {display:grid;grid-template-columns:1.25fr repeat(4,1fr);gap:16px;padding:20px 4px}
+.telemetry span {display:block;font-size:10px;color:var(--ink-muted);letter-spacing:.07em;margin-bottom:8px}
+.telemetry strong {font-size:23px;font-weight:600;letter-spacing:-.025em;color:var(--ink-main)}
+.telemetry>div:first-child strong {color:var(--lane-signal);font-size:30px}
+.signal-chain {display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}
+.signal-chain>div {border:1px solid var(--road-line);border-radius:8px;padding:12px;background:var(--road-panel);display:flex;flex-direction:column;gap:4px}
+.signal-chain small {font-size:10px;color:var(--lane-signal)}
+.signal-chain b {font-size:14px;font-weight:600}.signal-chain span {font-size:11px;color:var(--ink-muted)}
+.fine-print {color:var(--ink-muted);font-size:12px;line-height:1.65;margin:8px 0}
+.latent-grid {display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:8px 0}
+.latent-block {padding:16px;background:var(--road-panel);border:1px solid var(--road-line);border-radius:8px;overflow:hidden}
+.latent-block b {display:block;color:var(--lane-signal);font:600 14px monospace}
+.latent-block small {color:var(--ink-muted);font-size:11px}
+.latent-bars {height:64px;display:flex;gap:3px;align-items:end;margin-top:8px}
+.latent-bars span {background:var(--lane-signal);min-width:3px;flex:1;border-radius:2px 2px 0 0}
+#model-panel {border:1px solid var(--road-line);border-radius:12px;padding:16px;background:var(--road-panel)}
+#camera-rgb,#camera-top {border:1px solid var(--road-line);border-radius:10px}
+.camera-view img {width:100%!important;height:100%!important;object-fit:contain!important}
+.rgb-view img {image-rendering:pixelated}
+#main-status {font-size:13px;color:var(--ink-soft)}
+button {transition:background-color .15s ease,transform .15s ease!important;min-height:40px!important}
+button:active {transform:scale(.98)}
+button:focus-visible,a:focus-visible,input:focus-visible {outline:2px solid var(--lane-signal)!important;outline-offset:2px}
+@media(max-width:800px) {
+ .lab-header {align-items:start;flex-direction:column;gap:8px}.lab-header .caption{text-align:left}
+ .lab-header h1{font-size:25px}.telemetry{grid-template-columns:repeat(3,1fr);gap:16px}
+ .telemetry strong{font-size:19px}.telemetry>div:first-child strong{font-size:25px}
+ .signal-chain{grid-template-columns:repeat(2,1fr)}.latent-grid{grid-template-columns:1fr}
+}
+@media(prefers-reduced-motion:reduce){button{transition:none!important}}

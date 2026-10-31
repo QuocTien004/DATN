@@ -5,6 +5,23 @@ theo hướng Dreamer. Đây là implementation riêng, không phải bản tái
 DreamerV3. Input gồm RGB trước 64×64×3 và state 19 chiều; action là
 `[steering, throttle/brake]` trong `[-1,1]`.
 
+## Giao diện trình diễn (31/10/2026)
+
+Đã hợp nhất nhánh Tien vào Bao, giữ các thực nghiệm Offline/Online để đối
+chiếu. Giao diện Gradio có camera RGB và top-down thật, xem từng bước,
+sensor/latent/action, dự đoán Reward/Continue và Replay nhẹ cho CPU.
+
+```bash
+python -m pip install -r requirements-ui.txt
+python scripts/demo_ui.py --replay-only
+```
+
+Máy mô phỏng cần thêm PyTorch và MetaDrive. Xem
+[hướng dẫn demo, checkpoint và ba môi trường](docs/DEMO_UI.md) cùng
+[notebook Colab](notebooks/DATN_Gradio_Demo.ipynb).
+RL vẫn khóa. Tắt Safety Shield ngoài chưa loại quy tắc phanh/chống kẹt tích
+hợp trong Actor c23 của Tien. Thống kê đọc đúng file eval và bộ map tương ứng.
+
 ## Trạng thái ngày 17/10/2026
 
 Baseline nghiên cứu đang giữ là Actor học BC, nhận h/z và continuous state c. Các cập nhật Tien được hợp nhất để bảo toàn thực nghiệm và phục vụ demo, kết luận chất lượng vẫn theo [audit](docs/P1_P4_AUDIT.md).
@@ -84,7 +101,7 @@ không đổi tên hoặc sửa metadata checkpoint cũ để giả làm baselin
 | `scripts/run_rl_pilot_250.py` | Pilot RL 250 updates có ngắt sớm tự động Early-Stopping |
 | `scripts/run_long_train_experiment.py` | Pipeline huấn luyện dài hạn online/offline |
 | `scripts/plot_training_curves.py` | Vẽ đồ thị đường cong huấn luyện 4 ô |
-| `scripts/make_w7_docx.py` | Xuất file báo cáo Word tiến độ tuần 7 (`BC_TienDo/12-10_18-10(W7).docx`) |
+| `scripts/make_w7_docx.py` | Xuất Word từ `reports/progress.md` sang `reports/progress.docx` |
 
 Không commit data, checkpoint, credential hoặc log cá nhân. Giữ output riêng
 cho từng experiment, không ghi đè artifact đối chứng.

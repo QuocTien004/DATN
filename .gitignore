@@ -30,4 +30,6 @@ Thumbs.db
 # Visual demo output is generated locally, never bundled with source.
 /demo_runs/
 /.venv-ui/
+/DATN-demo-source.zip
+/reports/
 

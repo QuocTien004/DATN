@@ -1,5 +1,10 @@
 # Cập nhật nhánh Tien: Hoàn tất tích hợp P1, P2, P3, P4 (World Model Fixes & RL Pilot Setup)
 
+> Ghi chép lịch sử được giữ khi merge toàn bộ Tien ngày 31/10. Các kết luận
+> triệt để/pass và so sánh paired trong bản này cần đọc cùng đính chính ở
+> [audit 17/10](P1_P4_AUDIT.md). RL tiếp tục khóa. Không dùng script pilot lịch sử
+> như hướng dẫn chạy demo. Giao diện mới ở [DEMO_UI](DEMO_UI.md).
+
 Tài liệu này ghi chú lại các thay đổi quan trọng đã thực hiện trên nhánh `Tien` nhằm khắc phục các lỗi vật lý và chuẩn bị cho đợt tinh chỉnh Actor-Critic (RL).
 
 ## 1. Tích hợp P1 (Skip-connection GT Continuous State)

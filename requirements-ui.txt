@@ -1,0 +1,6 @@
+# Replay/plots/UI only: no torch, CUDA, or MetaDrive dependency.
+gradio==6.0.1
+numpy>=1.24,<2
+Pillow>=10,<13
+matplotlib>=3.7,<4
+PyYAML>=6

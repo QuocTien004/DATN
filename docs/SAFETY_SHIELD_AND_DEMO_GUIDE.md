@@ -1,5 +1,10 @@
 # Báo Cáo Kỹ Thuật Toàn Diện: Dữ Liệu, World Model (RSSM), Bộ Điều Khiển An Toàn & Demo 3D
 
+> Tài liệu lịch sử từ nhánh Tien. Các khẳng định hoàn thiện/100% chỉ áp dụng
+> cho bộ thử và phiên bản đã nêu, chưa bảo đảm trên map mới. Đọc thêm
+> [đính chính audit](P1_P4_AUDIT.md) và [giao diện mới](DEMO_UI.md).
+> Script thực nghiệm Online được giữ để đối chiếu, RL vẫn khóa.
+
 Tài liệu này tổng hợp đầy đủ và chi tiết toàn bộ các thành phần kỹ thuật cốt lõi của dự án xe tự hành dựa trên **Mô Hình Thế Giới (World Model)** trên nền tảng MetaDrive:
 1. **Chiến lược thu thập dữ liệu chuyên gia & Xử lý đa dạng bản đồ**
 2. **Kiến trúc & Cơ chế hoạt động của World Model (RSSM)**

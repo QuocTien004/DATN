@@ -1,5 +1,13 @@
 # Kiểm thử, tái lập và bàn giao
 
+## Giao diện 31/10/2026
+
+Suite bổ sung các hợp đồng recording/Replay, checksum/ZIP, lịch sử action,
+worker suy luận và callback Gradio. Các test dành riêng cho giao diện cần
+`requirements-ui.txt`; khi chưa cài Gradio, chúng được bỏ qua có giải thích.
+Test code không thay benchmark lái xe. Xem [DEMO_UI](DEMO_UI.md) để chọn
+chế độ CPU/GPU/Colab và chạy preflight camera/model trước khi trình diễn.
+
 ## Chạy tests
 
 ```bash
