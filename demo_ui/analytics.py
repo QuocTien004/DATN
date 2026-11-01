@@ -25,7 +25,8 @@ def read_evaluation(path):
 
 def compare_evaluations(left, right):
     a, b = read_evaluation(left), read_evaluation(right)
-    paired = (a['seeds'] == b['seeds'] and None not in a['seeds'] and a['horizon'] == b['horizon'])
+    paired = (a['seeds'] == b['seeds'] and None not in a['seeds']
+              and a['horizon'] is not None and a['horizon'] == b['horizon'])
     rows = []
     for name, result in [('Offline — tắt shield', a), ('Offline + Safety Shield', b)]:
         s = result['summary']
@@ -33,7 +34,8 @@ def compare_evaluations(left, right):
                      int(round(s['finish']*s['episodes'])),
                      int(round(s['crash']*s['episodes'])), int(round(s['out']*s['episodes'])),
                      result['horizon'], result['source']])
-    note = ('Danh sách map seed và horizon khớp.' if paired else 'Hai file khác seed/horizon. Không diễn giải chênh lệch là đối chứng paired.')
+    note = ('Danh sách map seed và horizon khớp.' if paired else
+            'Hai file thiếu hoặc khác seed/horizon. Không diễn giải chênh lệch là đối chứng paired.')
     if not a['provenance'] or not b['provenance']:
         note += ' JSON lịch sử thiếu checkpoint hash/runtime đầy đủ. Đây là kết quả lưu sẵn, chưa tái lập bởi giao diện.'
     return rows, note

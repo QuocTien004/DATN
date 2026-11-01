@@ -118,6 +118,15 @@ class ReplayTests(unittest.TestCase):
             self.assertIn('khác seed/horizon',note)
             self.assertIn('thiếu checkpoint hash',note)
 
+    def test_eval_without_horizon_is_not_reported_as_matching_protocol(self):
+        with tempfile.TemporaryDirectory() as td:
+            file=Path(td)/'evaluation.json'
+            file.write_text(json.dumps({'episodes':[dict(seed=7,route_completion=.4,
+                success=0.,collision=0.,out_of_road=0.)]}))
+            _,note=compare_evaluations(file,file)
+            self.assertIn('thiếu hoặc khác seed/horizon',note)
+            self.assertNotIn('horizon khớp',note)
+
     def test_training_axis_preserves_environment_step_and_update_keys(self):
         with tempfile.TemporaryDirectory() as td:
             file=Path(td)/'metrics.jsonl'
