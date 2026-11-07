@@ -306,9 +306,8 @@ không chứng minh kết quả10/10 của Tien sẽ giữ nguyên sau sửa wra
 5. Online RL hiện rủi ro cao nhất. Chỉ khi c, reward/continue, ranking và Critic
    đều đạt gate mới xét pilot≤250updates có early-stop. Chưa triển khai hướng mới.
 
-Nếu chốt phương án BC, cần thống nhất lại phạm vi với giảng viên khi đề cương
-yêu cầu Actor–Critic học từ imagination và đối chứng PPO/SAC. Chưa có căn cứ
-khẳng định BC hiện tại đã đáp ứng đầy đủ các tiêu chí đó.
+Kết quả BC chỉ kiểm chứng chính sách học từ dữ liệu expert. Nó chưa kiểm
+chứng Actor–Critic học từ imagination hoặc thay thế đối chứng PPO/SAC.
 
 ## Ghi chép lịch sử từ Tien, cần đọc cùng audit phía trên
 

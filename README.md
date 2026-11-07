@@ -5,11 +5,11 @@ theo hướng Dreamer. Đây là implementation riêng, không phải bản tái
 DreamerV3. Input gồm RGB trước 64×64×3 và state 19 chiều; action là
 `[steering, throttle/brake]` trong `[-1,1]`.
 
-## Giao diện trình diễn (31/10/2026)
+## Giao diện mô phỏng
 
-Đã hợp nhất nhánh Tien vào Bao, giữ các thực nghiệm Offline/Online để đối
-chiếu. Giao diện Gradio có camera RGB và top-down thật, xem từng bước,
-sensor/latent/action, dự đoán Reward/Continue và Replay nhẹ cho CPU.
+Giao diện Gradio hỗ trợ camera RGB và top-down, điều khiển từng bước,
+sensor/latent/action, dự đoán Reward/Continue và Replay trên CPU. Thiết lập
+nằm ở đầu trang, ảnh và tín hiệu đặt cạnh nhau, bản ghi nằm phía dưới.
 
 ```bash
 python -m pip install -r requirements-ui.txt
@@ -101,7 +101,6 @@ không đổi tên hoặc sửa metadata checkpoint cũ để giả làm baselin
 | `scripts/run_rl_pilot_250.py` | Pilot RL 250 updates có ngắt sớm tự động Early-Stopping |
 | `scripts/run_long_train_experiment.py` | Pipeline huấn luyện dài hạn online/offline |
 | `scripts/plot_training_curves.py` | Vẽ đồ thị đường cong huấn luyện 4 ô |
-| `scripts/make_w7_docx.py` | Xuất Word từ `reports/progress.md` sang `reports/progress.docx` |
 
 Không commit data, checkpoint, credential hoặc log cá nhân. Giữ output riêng
 cho từng experiment, không ghi đè artifact đối chứng.

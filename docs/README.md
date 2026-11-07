@@ -1,7 +1,11 @@
 # Tài liệu dự án
 
-Bắt đầu từ [README](../README.md). Đối chiếu source ngày 17/10/2026;
-giữ tên một số file để bảo toàn liên kết lịch sử.
+- [Giao diện mô phỏng và Replay](DEMO_UI.md): cài đặt, cấu hình, quan sát
+  tín hiệu và quản lý bản ghi trên CPU/GPU hoặc Colab.
+
+Bắt đầu từ [README](../README.md). Phần giao diện cập nhật ngày 07/11/2026.
+Các tài liệu nghiên cứu bên dưới giữ mốc đối chiếu riêng, chủ yếu 17/10/2026,
+và giữ tên một số file để bảo toàn liên kết lịch sử.
 
 1. [Kiến trúc h/z/c và pipeline](phase_c.md).
 2. [Setup và các lệnh chạy](TRAINING_GUIDE.md).
@@ -20,7 +24,7 @@ giữ tên một số file để bảo toàn liên kết lịch sử.
 
 Giao diện mới: [DEMO_UI](DEMO_UI.md) — Live, AI, từng bước, Replay CPU,
 thống kê và notebook Colab. Đọc phần timing và giới hạn bằng chứng trước
-khi trình bày kết quả.
+khi đọc kết quả.
 
 Giữ để tham khảo, không dùng làm benchmark baseline hiện tại:
 

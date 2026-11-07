@@ -1,4 +1,4 @@
-# Báo Cáo Kỹ Thuật Toàn Diện: Dữ Liệu, World Model (RSSM), Bộ Điều Khiển An Toàn & Demo 3D
+# Dữ liệu, World Model (RSSM), Safety Shield và mô phỏng 3D
 
 > Tài liệu lịch sử từ nhánh Tien. Các khẳng định hoàn thiện/100% chỉ áp dụng
 > cho bộ thử và phiên bản đã nêu, chưa bảo đảm trên map mới. Đọc thêm
@@ -17,7 +17,9 @@ Tài liệu này tổng hợp đầy đủ và chi tiết toàn bộ các thành
 
 ## 1. Chiến Lược Thu Thập Dữ Liệu Chuyên Gia (Data Collection Pipeline)
 
-Vị trí tệp dữ liệu: [`data/replay_buffer/expert_23d_25k.npz`](../data/replay_buffer/expert_23d_25k.npz), manifest: [`data/replay_buffer/expert_23d_25k.manifest.json`](../data/replay_buffer/expert_23d_25k.manifest.json)
+Vị trí artifact: `data/replay_buffer/expert_23d_25k.npz` và manifest
+`data/replay_buffer/expert_23d_25k.manifest.json`. Dữ liệu được cung cấp riêng,
+không có trong Git.
 
 ### 1.1. Giải quyết bài toán tổng quát hóa: Train ít map có bao quát được nhiều tình huống?
 - **Nguy cơ khi train ít map:** Nếu chỉ thu thập dữ liệu trên 1 hoặc 2 map cố định, World Model và Actor sẽ học vẹt (*overfitting*) tọa độ và hình học của riêng map đó. Khi mang sang map mới với góc cua khác hoặc mật độ xe khác, xe sẽ mất lái hoặc không nhận diện được đường đi.
@@ -135,7 +137,10 @@ Vị trí tệp: [`training/train_agent.py`](../training/train_agent.py), [`scri
 - Khi nạp dữ liệu offline 19D cũ vào Critic 23D, hệ thống tự động đệm 4 chiều vật cản chuẩn `[1.0, 0.0, 0.0, 0.0]` (tương ứng đường thông thoáng), giải quyết triệt để lỗi lệch chiều ma trận (*shape mismatch*).
 
 ### 3.3. Bảo Toàn Kiến Trúc Mạng Lõi
-- Kiến trúc mạng trong [`models/actor_critic.py`](../models/actor_critic.py) được giữ nguyên vẹn 100%, bảo đảm tương thích hoàn hảo với file checkpoint tốt nhất [`continuous_seed0_refit_warmup_c23.pt`](../checkpoints/critic_warmup/continuous_seed0_refit_warmup_c23.pt).
+- Loader kiểm cấu hình và nạp strict vào kiến trúc trong
+  [`models/actor_critic.py`](../models/actor_critic.py). Checkpoint c23 dùng trong
+  thử nghiệm là `checkpoints/critic_warmup/continuous_seed0_refit_warmup_c23.pt`,
+  được cung cấp riêng ngoài Git. Cần đúng chiều state và đúng World Model đi kèm.
 
 ---
 

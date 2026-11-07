@@ -1,4 +1,4 @@
-# Giao diện trình diễn DATN
+# Giao diện mô phỏng và Replay
 
 Chạy từ repo root bằng Python 3.10. Giao diện Gradio Blocks dùng tiếng Việt,
 chỉ nạp model, suy luận, đánh giá và phát lại. Không có bước train tự động.
@@ -32,6 +32,24 @@ Nhấn **Nạp model → Khởi tạo episode → Chạy**. Map seed quyết đ�
 RNG seed dùng để lặp lại ngẫu nhiên, hai trường được giữ riêng. Chọn shield
 trước khi khởi tạo, muốn đổi cấu hình thì bắt đầu episode mới. Horizon tối
 đa trong UI là 5.000 bước.
+
+## Bố cục và điều khiển
+
+- **Thiết lập mô phỏng** nằm ở đầu trang, gồm checkpoint, thiết bị,
+  map seed, RNG seed, horizon và Safety Shield. WM riêng nằm trong tùy chọn
+  nâng cao. Thay cấu hình thì khởi tạo episode mới.
+  Sau khi khởi tạo, cụm thiết lập tự thu gọn để dành chỗ cho camera. Bấm
+  tiêu đề để mở lại. Cụm chọn Replay cũng thu gọn sau khi nạp thành công.
+- **Điều khiển phát** nằm sát vùng quan sát: chạy, tạm dừng, tiến một bước,
+  kết thúc và nhịp hiển thị.
+- **Vùng quan sát** đặt RGB và top-down cạnh cột tín hiệu. Tiến độ tuyến,
+  steering, ga/phanh, Reward/Continue và trạng thái cùng thuộc bước đang xem.
+- **Phân tích mô hình** mở thêm pipeline, bảng prior/posterior/thực tế,
+  cảm biến và latent. Bản ghi và nút xuất ZIP nằm cuối trang.
+
+Replay dùng cùng cách tổ chức vùng ảnh/tín hiệu. Thanh bước chỉ chọn dữ liệu
+đã ghi. Tua trong Live không khôi phục simulator về quá khứ. Trên màn hình
+hẹp các cụm tự xếp dọc, ảnh giữ nguyên tỷ lệ.
 
 Camera giữ đúng ảnh RGB đầu vào Encoder, thường 64×64. Ảnh được phóng lớn
 để xem, không thêm dữ liệu ảnh cho mạng. Top-down là render của MetaDrive,
@@ -84,7 +102,7 @@ trên Drive. Hoàn tất thì ngắt runtime GPU trong Colab.
   tại và action thực thi trước đó để cập nhật bộ nhớ h/z.
 - c23 là vector quan sát 23 chiều đi thêm trực tiếp vào Actor. Checkpoint
   đã audit không có continuous c. Bốn tọa độ vật cản đọc từ simulator.
-- Actor c23 của Tien có thêm quy tắc phanh/chống kẹt trong `Actor.forward`
+- Actor c23 có thêm quy tắc phanh/chống kẹt trong `Actor.forward`
   khi eval. Vì vậy “tắt shield” trong UI chỉ tắt lớp Safety Shield bên ngoài,
   chưa đồng nghĩa toàn bộ lệnh là đầu ra thuần của mạng neural.
 - Nhánh c19 continuous nếu có sẽ được thể hiện riêng từ checkpoint. Không
@@ -152,7 +170,7 @@ python -m unittest discover -s tests -q
 python scripts/demo_ui.py --help
 ```
 
-Preflight trên máy GPU của thành viên (không train):
+Kiểm tra camera/model trên môi trường GPU:
 
 ```bash
 python scripts/check_demo_runtime.py --checkpoint-dir checkpoints \
