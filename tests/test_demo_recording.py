@@ -13,10 +13,28 @@ from PIL import Image
 from demo_ui.recording import EpisodeWriter, EpisodeReader, export_episode, import_episode
 from demo_ui.analytics import compare_evaluations, read_training_log
 from demo_ui.controller import Controller
-from demo_ui.presentation import prediction_rows, sensor_rows
+from demo_ui.presentation import metrics_html, prediction_rows, sensor_rows
 
 
 class ReplayTests(unittest.TestCase):
+    def test_signal_panel_compares_prior_with_result_of_same_action(self):
+        row=dict(route_completion=.42,action_executed=[-.25,.75],reward=-2.5,
+                 continue_target=1.,episode_return=10.,
+                 prior={'reward':-1.25,'continue_probability':.875},
+                 posterior_next={'reward':999.,'continue_probability':.123})
+        view=metrics_html(row)
+        for value in ['42.0%','-0.250','0.750','-1.250','-2.500','0.875','1.000']:
+            self.assertIn(value,view)
+        self.assertNotIn('999.000',view)
+        self.assertNotIn('0.123',view)
+
+    def test_empty_signal_panel_does_not_invent_zero_results(self):
+        view=metrics_html()
+        self.assertIn('Chưa có episode',view)
+        self.assertIn('—',view)
+        self.assertNotIn('<progress',view)
+        self.assertNotIn('0.000',view)
+
     def make_recording(self, root):
         # Unit fixture only, never offered as model/demo evidence.
         writer=EpisodeWriter(root,dict(map_seed=7,rng_seed=0,safety_shield=False))

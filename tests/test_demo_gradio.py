@@ -40,5 +40,21 @@ class GradioTests(unittest.TestCase):
         self.assertEqual(result[-1],[])
         self.assertIn('Khởi tạo episode mới',result[10])
 
+    def test_successful_create_folds_settings_without_dropping_frame_outputs(self):
+        callback=next(f for f in self.app.fns.values() if f.fn and f.fn.__name__=='on_create')
+        with patch.object(self.controller,'open',return_value={}):
+            result=callback.fn('unit-session',7,0,10,False)
+        self.assertEqual(len(result),len(callback.outputs))
+        self.assertFalse(result[-1].open)
+
+    def test_successful_replay_load_folds_picker_and_keeps_metadata(self):
+        callback=next(f for f in self.app.fns.values() if f.fn and f.fn.__name__=='on_replay_load')
+        data=dict(record={'step':0,'state':[]},metadata={'map_seed':7},length=1,rgb=None,topdown=None)
+        with patch.object(self.controller,'load_replay',return_value=data):
+            result=callback.fn('unit-session','unused',None)
+        self.assertEqual(len(result),len(callback.outputs))
+        self.assertEqual(result[8],data['metadata'])
+        self.assertFalse(result[-1].open)
+
 
 if __name__=='__main__':unittest.main()

@@ -79,53 +79,59 @@ def build_app(controller=None):
                 gr.Slider(maximum=max(1,result['length']-1),value=row['step']),status,
                 meta)
 
-    with gr.Blocks(title='DATN · Phòng kiểm chứng xe tự hành', analytics_enabled=False) as demo:
+    with gr.Blocks(title='DATN · Mô phỏng xe tự hành', analytics_enabled=False) as demo:
         token = gr.State(value=None, time_to_live=1800, delete_callback=ctx.close)
-        gr.HTML('<header class="lab-header"><div><p>DATN / WORLD MODEL LAB</p><h1>Phòng kiểm chứng xe tự hành</h1></div><div class="caption">Quan sát xe. Dừng từng bước. Đối chiếu quyết định.<br>Offline c23 · MetaDrive · RSSM / Actor–Critic</div></header>')
+        gr.HTML('<header class="lab-header"><div><p>DATN / AUTONOMOUS DRIVING</p><h1>Mô phỏng xe tự hành</h1></div><div class="caption">Camera, tín hiệu và hành trình trong cùng một không gian.<br>MetaDrive · World Model · Actor–Critic</div></header>')
         with gr.Tabs(selected='replay' if ctx.replay_only else 'live'):
             with gr.Tab('Mô phỏng & từng bước',id='live'):
-                with gr.Row():
-                    with gr.Column(scale=1,min_width=260,elem_id='model-panel'):
-                        gr.Markdown('### Thiết lập phiên chạy')
-                        checkpoints=gr.Dropdown(ctx.checkpoints(),label='Checkpoint Actor / Offline / Online',interactive=not ctx.replay_only)
-                        refresh=gr.Button('Quét lại checkpoint',size='sm')
+                with gr.Accordion('Thiết lập mô phỏng',open=True,elem_id='session-settings',elem_classes=['settings-panel']) as settings:
+                    with gr.Row(elem_classes=['settings-row']):
+                        checkpoints=gr.Dropdown(ctx.checkpoints(),label='Checkpoint',scale=4,min_width=260,interactive=not ctx.replay_only)
+                        refresh=gr.Button('Quét lại',scale=0,min_width=92)
+                        device=gr.Radio(['cpu','cuda'],value='cpu',label='Thiết bị suy luận',scale=1,min_width=180,elem_classes=['device-selector'],interactive=not ctx.replay_only)
+                        load=gr.Button('Nạp model',scale=0,min_width=126,interactive=not ctx.replay_only)
+                    with gr.Row(elem_classes=['settings-row']):
+                        seed=gr.Number(value=10000,label='Map seed',precision=0,min_width=128,interactive=not ctx.replay_only)
+                        rng=gr.Number(value=0,label='RNG seed',precision=0,min_width=128,interactive=not ctx.replay_only)
+                        horizon=gr.Number(value=1400,label='Giới hạn bước',precision=0,min_width=128,interactive=not ctx.replay_only)
+                        shield=gr.Checkbox(value=False,label='Safety Shield bên ngoài',min_width=208,interactive=not ctx.replay_only)
+                        create=gr.Button('Khởi tạo episode',variant='primary',min_width=176,interactive=not ctx.replay_only)
+                    with gr.Accordion('Tùy chọn World Model',open=False,elem_classes=['compact-details']):
                         wm=gr.Textbox(label='WM riêng (để trống nếu đã nhúng)',placeholder='world_model/latest.pt',interactive=not ctx.replay_only)
-                        device=gr.Radio(['cpu','cuda'],value='cpu',label='Thiết bị suy luận',interactive=not ctx.replay_only)
-                        load=gr.Button('Nạp model',variant='primary',interactive=not ctx.replay_only)
-                        model_status=gr.Markdown('Chế độ Replay CPU — không nạp model/MetaDrive.' if ctx.replay_only else 'Chưa nạp checkpoint. Chỉ chọn checkpoint đáng tin cậy của dự án.')
-                        seed=gr.Number(value=10000,label='Map seed',precision=0)
-                        rng=gr.Number(value=0,label='RNG seed (tách khỏi map)',precision=0)
-                        horizon=gr.Number(value=1400,label='Giới hạn bước episode',precision=0)
-                        shield=gr.Checkbox(value=False,label='Bật Safety Shield bên ngoài')
-                        create=gr.Button('Khởi tạo episode',interactive=not ctx.replay_only)
-                        gr.Markdown('Thay seed/checkpoint/shield cần khởi tạo episode mới. RL không được chạy từ giao diện.')
-                    with gr.Column(scale=4,min_width=480):
-                        telemetry=gr.HTML(metrics_html())
-                        with gr.Row():
-                            rgb=gr.Image(label='Camera RGB — đầu vào thật của Encoder',type='numpy',interactive=False,height=310,elem_id='camera-rgb',elem_classes=['camera-view','rgb-view'])
-                            top=gr.Image(label='Top-down — MetaDrive render',type='numpy',interactive=False,height=310,elem_id='camera-top',elem_classes=['camera-view'])
-                        with gr.Row():
-                            run=gr.Button('▶ Chạy',variant='primary',interactive=not ctx.replay_only)
-                            pause=gr.Button('Ⅱ Tạm dừng')
-                            step=gr.Button('Tiến 1 bước →',interactive=not ctx.replay_only)
-                            end=gr.Button('Kết thúc phiên chạy',interactive=not ctx.replay_only)
-                        with gr.Row():
-                            timeline=gr.Slider(0,1,value=0,step=1,label='Xem lại bước đã ghi (tạm dừng trước khi tua)',interactive=False)
-                            speed=gr.Radio([1,2,5,10],value=5,label='Nhịp hiển thị (bước/giây)')
+                    model_status=gr.Markdown('Chế độ Replay CPU. Chuyển sang tab Replay để mở bản ghi.' if ctx.replay_only else 'Chọn checkpoint và nạp model để bắt đầu.',elem_id='model-status')
+                with gr.Row(elem_id='live-controls',elem_classes=['transport-bar']):
+                    run=gr.Button('▶ Chạy',variant='primary',min_width=100,interactive=not ctx.replay_only)
+                    pause=gr.Button('Ⅱ Tạm dừng',min_width=116)
+                    step=gr.Button('Tiến 1 bước →',min_width=128,interactive=not ctx.replay_only)
+                    end=gr.Button('Kết thúc phiên chạy',min_width=156,interactive=not ctx.replay_only)
+                    speed=gr.Radio([1,2,5,10],value=5,label='Nhịp hiển thị (bước/giây)',min_width=230)
+                with gr.Row(elem_id='live-workspace',elem_classes=['observation-workspace']):
+                    with gr.Column(scale=4,min_width=460,elem_classes=['camera-desk']):
+                        with gr.Row(elem_classes=['camera-pair']):
+                            rgb=gr.Image(label='Camera RGB · đầu vào Encoder',type='numpy',interactive=False,height=320,min_width=200,elem_id='camera-rgb',elem_classes=['camera-view','rgb-view'])
+                            top=gr.Image(label='Top-down · MetaDrive',type='numpy',interactive=False,height=320,min_width=200,elem_id='camera-top',elem_classes=['camera-view'])
+                        timeline=gr.Slider(0,1,value=0,step=1,label='Xem lại bước đã ghi (tạm dừng trước khi tua)',interactive=False)
                         status=gr.Markdown('Khởi tạo episode để bắt đầu.',elem_id='main-status')
-                        pipeline=gr.HTML(pipeline_html())
-                        predictions=gr.Dataframe(headers=['Đại lượng','Prior trước khi thấy ảnh kế','Posterior sau ảnh kế','Thực tế'],datatype=['str','number','number','number'],label='Dự đoán bước kế và kết quả sau action',interactive=False)
-                        gr.Markdown('Reward đã đổi từ symlog về đơn vị môi trường, giới hạn hiển thị như code imagination. Continue thật = 1 − terminated. Timeout riêng vẫn có Continue = 1. Ảnh/sensor của bước t đi cùng action t và kết quả sau action đó.')
-                        with gr.Accordion('Cảm biến và bộ nhớ ở bước đang chọn',open=False):
-                            sensors=gr.Dataframe(headers=['Index','Cảm biến / chuẩn hóa','Giá trị'],datatype=['number','str','number'],interactive=False)
+                    with gr.Column(scale=1,min_width=256,elem_classes=['signal-rail']):
+                        telemetry=gr.HTML(metrics_html(),elem_id='live-signals')
+                with gr.Accordion('Phân tích mô hình',open=False,elem_id='live-analysis',elem_classes=['analysis-panel']):
+                    pipeline=gr.HTML(pipeline_html())
+                    predictions=gr.Dataframe(headers=['Đại lượng','Prior trước ảnh kế','Posterior sau ảnh kế','Thực tế'],datatype=['str','number','number','number'],label='Dự đoán và kết quả sau cùng một action',interactive=False)
+                    gr.Markdown('Reward hiển thị ở đơn vị môi trường. Continue thật = 1 − terminated, timeout riêng vẫn bằng 1. Ảnh và cảm biến ở bước t đi cùng action t và kết quả sau action đó.',elem_classes=['helper-note'])
+                    with gr.Row():
+                        with gr.Column():
+                            sensors=gr.Dataframe(headers=['Index','Cảm biến / chuẩn hóa','Giá trị'],datatype=['number','str','number'],label='Cảm biến',max_height=360,interactive=False)
+                        with gr.Column():
                             latent=gr.HTML(latent_html({}))
-                        with gr.Row():
-                            export=gr.Button('Xuất Replay ZIP')
-                            download=gr.File(label='Bản ghi có thể phát lại trên CPU',interactive=False)
-                        folder=gr.Textbox(label='Thư mục bản ghi trên máy chạy',interactive=False)
+                with gr.Column(elem_id='live-results',elem_classes=['results-panel']):
+                    gr.Markdown('### Bản ghi episode',elem_classes=['section-title'])
+                    with gr.Row():
+                        export=gr.Button('Xuất Replay ZIP',scale=0,min_width=176,elem_id='export-replay')
+                        download=gr.File(label='Replay ZIP',height=80,interactive=False,elem_id='replay-download')
+                        folder=gr.Textbox(label='Thư mục lưu',interactive=False)
                 live_timer=gr.Timer(.2,active=False)
 
-            with gr.Tab('AI & thử đầu vào'):
+            with gr.Tab('AI & thử đầu vào',id='inference'):
                 gr.Markdown('### Theo dõi một lịch sử RSSM\nNạp model ở tab Mô phỏng. Ảnh phải là camera MetaDrive RGB đúng kích thước checkpoint. Vector cảm biến cần đúng thứ tự và chuẩn hóa, không nhập giá trị vật lý thay vector chuẩn hóa. Cần đóng mô phỏng trước khi thử ảnh riêng.')
                 with gr.Row():
                     input_image=gr.Image(label='Ảnh camera MetaDrive RGB',type='numpy',image_mode='RGB',sources=['upload'],height=280)
@@ -134,38 +140,49 @@ def build_app(controller=None):
                         first=gr.Checkbox(value=True,label='Bắt đầu episode mới / reset RSSM')
                         previous=gr.Textbox(label='Action thực thi trước ảnh này',value='[0, 0]')
                         infer=gr.Button('Suy luận quan sát này',variant='primary',interactive=not ctx.replay_only)
-                infer_status=gr.Markdown('Bước đầu dùng latent khởi tạo và action trước bằng 0. Nối chuỗi cần bỏ reset và cung cấp đúng action đã thực thi. Không trộn ảnh từ hai episode.')
-                infer_chain=gr.HTML(pipeline_html())
-                infer_latent=gr.HTML(latent_html({}))
-                infer_sensors=gr.Dataframe(headers=['Index','Cảm biến / chuẩn hóa','Giá trị'],interactive=False)
-                infer_result=gr.JSON(label='Action, heads và lịch sử thực tế (không có reward thật khi chỉ upload ảnh)')
+                with gr.Column(elem_classes=['results-panel']):
+                    gr.Markdown('### Kết quả suy luận',elem_classes=['section-title'])
+                    infer_status=gr.Markdown('Bước đầu dùng latent khởi tạo và action trước bằng 0. Nối chuỗi cần bỏ reset và cung cấp đúng action đã thực thi. Không trộn ảnh từ hai episode.')
+                    infer_chain=gr.HTML(pipeline_html())
+                    with gr.Row():
+                        infer_sensors=gr.Dataframe(headers=['Index','Cảm biến / chuẩn hóa','Giá trị'],label='Cảm biến đầu vào',max_height=360,interactive=False)
+                        infer_latent=gr.HTML(latent_html({}))
+                    infer_result=gr.JSON(label='Action, heads và lịch sử (ảnh rời không có reward thực tế)')
 
             with gr.Tab('Replay trên CPU',id='replay'):
                 gr.Markdown('### Phát lại đồng bộ\nReplay dùng frame RGB đã ghi, top-down nếu có, sensor/action và kết quả đúng cùng bước. Không cần PyTorch, GPU hoặc MetaDrive. Nạp ZIP đã xuất, hoặc nhập thư mục recording trên máy này.')
-                with gr.Row():
-                    replay_zip=gr.File(label='Replay ZIP',file_types=['.zip'],type='filepath')
-                    replay_path=gr.Textbox(label='Thư mục episode hoặc manifest.json trên máy',placeholder='demo_runs/20261031_…/manifest.json')
-                    replay_load=gr.Button('Nạp Replay',variant='primary')
-                replay_metrics=gr.HTML(metrics_html())
-                with gr.Row():
-                    replay_rgb=gr.Image(label='Camera RGB đã ghi',interactive=False,height=310,elem_classes=['camera-view','rgb-view'])
-                    replay_top=gr.Image(label='Top-down đã ghi',interactive=False,height=310,elem_classes=['camera-view'])
-                with gr.Row():
-                    replay_play=gr.Button('▶ Phát',variant='primary')
-                    replay_pause=gr.Button('Ⅱ Dừng')
-                    replay_next=gr.Button('Bước kế →')
-                    replay_rate=gr.Radio([1,2,5,10],value=5,label='Tốc độ phát (bước/giây)')
-                replay_slider=gr.Slider(0,1,value=0,step=1,label='Bước đang xem')
-                replay_status=gr.Markdown('Chưa nạp Replay.')
-                replay_predictions=gr.Dataframe(headers=['Đại lượng','Prior bước kế','Posterior bước kế','Thực tế'],interactive=False)
-                with gr.Accordion('Sensor, latent và nguồn bản ghi',open=False):
-                    replay_sensors=gr.Dataframe(headers=['Index','Cảm biến / chuẩn hóa','Giá trị'],interactive=False)
-                    replay_latent=gr.HTML(latent_html({}))
-                    replay_meta=gr.JSON(label='Manifest: hash, config, seed, runtime và trạng thái hoàn tất')
+                with gr.Accordion('Mở bản ghi',open=True,elem_id='replay-settings',elem_classes=['settings-panel']) as replay_settings:
+                    with gr.Row(elem_classes=['settings-row']):
+                        replay_zip=gr.File(label='Replay ZIP',file_types=['.zip'],type='filepath',height=88,min_width=220)
+                        replay_path=gr.Textbox(label='Thư mục episode hoặc manifest.json trên máy',placeholder='demo_runs/episode/manifest.json',scale=2,min_width=260)
+                        replay_load=gr.Button('Nạp Replay',variant='primary',scale=0,min_width=144)
+                with gr.Row(elem_classes=['transport-bar']):
+                    replay_play=gr.Button('▶ Phát',variant='primary',min_width=100)
+                    replay_pause=gr.Button('Ⅱ Dừng',min_width=100)
+                    replay_next=gr.Button('Bước kế →',min_width=128)
+                    replay_rate=gr.Radio([1,2,5,10],value=5,label='Tốc độ phát (bước/giây)',min_width=230)
+                with gr.Row(elem_id='replay-workspace',elem_classes=['observation-workspace']):
+                    with gr.Column(scale=4,min_width=460,elem_classes=['camera-desk']):
+                        with gr.Row(elem_classes=['camera-pair']):
+                            replay_rgb=gr.Image(label='Camera RGB đã ghi',interactive=False,height=320,min_width=200,elem_id='replay-rgb',elem_classes=['camera-view','rgb-view'])
+                            replay_top=gr.Image(label='Top-down đã ghi',interactive=False,height=320,min_width=200,elem_id='replay-top',elem_classes=['camera-view'])
+                        replay_slider=gr.Slider(0,1,value=0,step=1,label='Bước đang xem')
+                        replay_status=gr.Markdown('Chưa nạp Replay.',elem_id='replay-status')
+                    with gr.Column(scale=1,min_width=256,elem_classes=['signal-rail']):
+                        replay_metrics=gr.HTML(metrics_html(),elem_id='replay-signals')
+                with gr.Accordion('Phân tích bản ghi',open=False,elem_classes=['analysis-panel']):
+                    replay_predictions=gr.Dataframe(headers=['Đại lượng','Prior bước kế','Posterior bước kế','Thực tế'],label='Reward / Continue',interactive=False)
+                    with gr.Row():
+                        with gr.Column():
+                            replay_sensors=gr.Dataframe(headers=['Index','Cảm biến / chuẩn hóa','Giá trị'],label='Cảm biến',max_height=360,interactive=False)
+                        with gr.Column():
+                            replay_latent=gr.HTML(latent_html({}))
+                with gr.Accordion('Thông tin bản ghi',open=False,elem_classes=['results-panel']):
+                    replay_meta=gr.JSON(label='Manifest: checkpoint, cấu hình, seed và trạng thái hoàn tất')
                 replay_timer=gr.Timer(.2,active=False)
 
-            with gr.Tab('Thống kê & đối chứng'):
-                gr.Markdown('### Offline thuần và Safety Shield\nCác số dưới được tính từ episode trong JSON. “Tắt shield” chỉ tắt lớp bên ngoài, Actor c23 của Tien hiện vẫn có quy tắc điều khiển tích hợp.')
+            with gr.Tab('Thống kê & đối chứng',id='statistics'):
+                gr.Markdown('### Offline và Safety Shield\nThống kê tính từ từng episode trong JSON. Tắt shield chỉ tắt lớp bên ngoài, Actor c23 vẫn có quy tắc điều khiển tích hợp.')
                 default_a=ROOT/'evaluation/baseline_c23_pure.json'
                 default_b=ROOT/'evaluation/baseline_c23_shield.json'
                 comparison=[]; comparison_note='Chọn hai file eval để tính.'
@@ -187,20 +204,38 @@ def build_app(controller=None):
                 plot=gr.Plot(label='Chỉ số huấn luyện')
                 log_state=gr.State(value=[])
 
-            with gr.Tab('Chuẩn bị bảo vệ'):
-                gr.Markdown('''### Kiểm tra trước buổi trình diễn
+            with gr.Tab('Hướng dẫn',id='guide'):
+                gr.Markdown('''### Bắt đầu sử dụng
 
-1. Trên máy GPU, nạp đúng checkpoint và kiểm hash/config hiển thị. Khởi tạo map đã kiểm tra, chạy ngắn rồi xuất Replay dự phòng.
-2. Cho hội đồng chọn map seed mới. Báo route, finish, crash, out và timeout kể cả khi xe thất bại. Giữ RNG seed riêng khi so có/không shield.
-3. Tạm dừng, tiến một bước và xem sensor → embedding → h/z → Actor. Thanh bộ nhớ chỉ minh họa các giá trị thực, không chứng minh từng neuron có ý nghĩa vật lý.
-4. Tua về bước đã ghi chỉ đổi phần đang xem. Tiếp tục Live chạy từ trạng thái simulator mới nhất, không khôi phục thế giới về quá khứ.
-5. Với chế độ chỉ CPU hoặc render không khả dụng, dùng tab Replay. Giao diện hiển thị rõ khi bản ghi thiếu top-down.
+**Mô phỏng:** chọn checkpoint và thiết bị, nạp model rồi khởi tạo episode.
+Chạy liên tục hoặc tiến từng bước. Camera và cột tín hiệu hiển thị dữ liệu
+cùng bước. Đổi map, seed hoặc shield thì bắt đầu episode mới.
 
-### Phạm vi kết quả
+**Replay:** mở ZIP hoặc thư mục episode đã lưu. Phát, dừng hoặc chọn bước
+trên thanh thời gian. Chế độ này dùng CPU và không cần nạp model.
 
-c23 dùng state hiện tại trực tiếp ngoài latent h/z. Bốn cảm biến vật cản đọc từ simulator. Không trình bày chúng như vật thể được mạng tự phát hiện từ ảnh. Reward/Continue là dự đoán chưa đạt toàn bộ gate. RL vẫn khóa.
+**Thử đầu vào:** đóng mô phỏng, nhập ảnh RGB và state cùng quan sát. Reset
+RSSM ở đầu episode. Khi nối lịch sử, nhập action đã thực thi ở bước trước.
 
-Thí nghiệm Online, checkpoint và tài liệu cũ được giữ để đối chiếu. Giao diện chỉ suy luận/đánh giá, không có nút huấn luyện.
+### Đọc tín hiệu
+
+Steering và ga/phanh là action chuẩn hóa trong [-1,1]. Tiến độ tuyến lấy
+từ MetaDrive. Reward/Continue dự đoán được so với kết quả sau cùng action.
+Mở phần phân tích để xem prior, posterior, cảm biến và bộ nhớ RSSM.
+
+Thanh thời gian chỉ xem dữ liệu đã ghi, không quay ngược simulator.
+Ảnh rời không có reward thực tế. Thanh latent thể hiện giá trị đặc trưng,
+không phải độ tin cậy của mô hình.
+
+### Model và bản ghi
+
+c23 dùng h/z và state hiện tại trực tiếp. Bốn cảm biến vật cản lấy từ
+simulator. Actor có quy tắc phanh/chống kẹt, Safety Shield là lớp can thiệp
+bên ngoài. Reward/Continue còn có sai số. Giao diện phục vụ suy luận và
+đánh giá, RL tiếp tục khóa.
+
+Tạm dừng trước khi xuất Replay ZIP. Bản ghi lưu ảnh, cảm biến, action,
+checkpoint hash và cấu hình để đọc lại trên CPU.
 ''')
 
         live_outputs=[rgb,top,telemetry,predictions,sensors,latent,pipeline,timeline,status,folder]
@@ -215,7 +250,7 @@ Thí nghiệm Online, checkpoint và tài liệu cũ được giữ để đối
                     pipeline_html(),latent_html({}),[])
 
         def on_create(token,seed,rng,horizon,shield):
-            return (*live_view(ctx.open(token,seed,rng,horizon,shield)),gr.Timer(active=False))
+            return (*live_view(ctx.open(token,seed,rng,horizon,shield)),gr.Timer(active=False),gr.Accordion(open=False))
 
         def on_step(token):
             return live_view(ctx.step(token))
@@ -261,7 +296,7 @@ Thí nghiệm Online, checkpoint và tài liệu cũ được giữ để đối
                     f"Đã xử lý {result['history_steps']} quan sát trong lịch sử hiện tại. Action: {result['action']}. Heads posterior thuộc ảnh đang nhập, không có ground truth reward để đối chiếu.")
 
         def on_replay_load(token,path,archive):
-            return (*replay_view(ctx.load_replay(token,path,archive)),gr.Timer(active=False))
+            return (*replay_view(ctx.load_replay(token,path,archive)),gr.Timer(active=False),gr.Accordion(open=False))
 
         def on_replay_seek(token,index):
             s=ctx.get(token)
@@ -313,7 +348,7 @@ Thí nghiệm Online, checkpoint và tài liệu cũ được giữ để đối
         refresh.click(lambda:gr.Dropdown(choices=ctx.checkpoints()),outputs=checkpoints,api_name='scan_checkpoints')
         load.click(guarded(on_load_model),[token,checkpoints,wm,device],
                    [model_status,live_timer]+live_outputs+[infer_result,infer_status,infer_chain,infer_latent,infer_sensors],api_name='load_model',**opts)
-        create.click(guarded(on_create),[token,seed,rng,horizon,shield],live_outputs+[live_timer],api_name='create_episode',**opts)
+        create.click(guarded(on_create),[token,seed,rng,horizon,shield],live_outputs+[live_timer,settings],api_name='create_episode',**opts)
         step.click(guarded(on_step),token,live_outputs,api_name='next_step',**opts)
         run.click(guarded(on_run),token,live_timer,api_name='run',**opts)
         pause.click(guarded(on_pause),token,live_timer,queue=False,api_name='pause')
@@ -323,7 +358,7 @@ Thí nghiệm Online, checkpoint và tài liệu cũ được giữ để đối
         end.click(guarded(on_end),token,[live_timer,status],api_name='close_episode',**opts)
         export.click(guarded(ctx.export),token,download,api_name='export_replay',**opts)
         infer.click(guarded(on_infer),[token,input_image,sensor_json,previous,first],[infer_result,infer_chain,infer_latent,infer_sensors,infer_status],api_name='infer',**opts)
-        replay_load.click(guarded(on_replay_load),[token,replay_path,replay_zip],replay_outputs+[replay_timer],api_name='replay_load')
+        replay_load.click(guarded(on_replay_load),[token,replay_path,replay_zip],replay_outputs+[replay_timer,replay_settings],api_name='replay_load')
         replay_slider.release(guarded(on_replay_seek),[token,replay_slider],replay_outputs+[replay_timer],api_name='replay_seek')
         replay_play.click(guarded(on_replay_play),token,replay_timer,api_name='replay_play')
         replay_pause.click(guarded(on_replay_pause),token,replay_timer,queue=False,api_name='replay_pause')

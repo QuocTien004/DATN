@@ -39,10 +39,32 @@ def metrics_html(row=None):
               else 'Va chạm' if any(flags.get(k) for k in ['crash','crash_vehicle','crash_object','crash_sidewalk'])
               else 'Hết thời gian' if row.get('truncated') else 'Đang chạy' if row else 'Chưa có episode')
     action = row.get('action_executed',[None,None])
-    data = [('QUÃNG ĐƯỜNG', number(100*row['route_completion'],1)+'%' if 'route_completion' in row else '—'),
-            ('GÓC LÁI', number(action[0])), ('GA / PHANH', number(action[1])),
-            ('TỔNG REWARD', number(row.get('episode_return'),1)), ('KẾT QUẢ',status)]
-    return '<div class="telemetry">'+''.join(f'<div><span>{label}</span><strong>{_escape(value)}</strong></div>' for label,value in data)+'</div>'
+    route = row.get('route_completion')
+    route_text = number(100*route,1)+'%' if route is not None else '—'
+    progress = (f'<progress max="100" value="{min(100,max(0,100*route)):.2f}" '
+                'aria-label="Tiến độ tuyến"></progress>' if route is not None else '')
+    status_kind = ('idle' if not row else 'success' if flags.get('arrive_dest') else
+                   'warning' if row.get('terminated') or row.get('truncated') or
+                   status in {'Ra đường','Va chạm'} else 'active')
+    prior = row.get('prior',{})
+    comparisons = [('Reward',prior.get('reward'),row.get('reward')),
+                   ('Continue',prior.get('continue_probability'),row.get('continue_target'))]
+    signals = ''.join(
+        f'<div class="prediction-signal"><span>{label}</span><dl>'
+        f'<div><dt>Dự đoán</dt><dd>{_escape(number(predicted))}</dd></div>'
+        f'<div><dt>Thực tế</dt><dd>{_escape(number(actual))}</dd></div></dl></div>'
+        for label,predicted,actual in comparisons)
+    return (
+        '<section class="telemetry" aria-label="Tín hiệu cùng bước">'
+        '<div class="signal-heading"><span>TÍN HIỆU</span>'
+        f'<span class="episode-state {status_kind}">{_escape(status)}</span></div>'
+        f'<div class="route-signal"><span>Tiến độ tuyến</span><strong>{_escape(route_text)}</strong>{progress}</div>'
+        '<div class="action-signals">'
+        f'<div><span>Steering</span><strong>{_escape(number(action[0]))}</strong></div>'
+        f'<div><span>Ga / phanh</span><strong>{_escape(number(action[1]))}</strong></div></div>'
+        f'<div class="prediction-signals">{signals}</div>'
+        f'<div class="return-signal"><span>Tổng reward</span><strong>{_escape(number(row.get("episode_return"),1))}</strong></div>'
+        '</section>')
 
 
 def pipeline_html(features=None, state_dim=None):
@@ -54,7 +76,7 @@ def pipeline_html(features=None, state_dim=None):
              ('Actor', 'steering · ga/phanh')]
     content = '<div class="signal-chain">'+''.join(f'<div><small>{i+1:02d}</small><b>{label}</b><span>{_escape(value)}</span></div>' for i,(label,value) in enumerate(parts))+'</div>'
     if state_dim == 23:
-        content += '<p class="fine-print">c23: state quan sát đi thêm trực tiếp vào Actor. Actor có quy tắc phanh/chống kẹt của Tien. Safety Shield là lớp can thiệp bên ngoài.</p>'
+        content += '<p class="fine-print">c23: state quan sát đi thêm trực tiếp vào Actor. Actor có quy tắc phanh/chống kẹt. Safety Shield là lớp can thiệp bên ngoài.</p>'
     elif c:
         content += '<p class="fine-print">Nhánh c do RSSM tạo: '+str(c['dim'])+' chiều.</p>'
     return content
